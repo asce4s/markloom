@@ -4,9 +4,36 @@
 
 use std::collections::BTreeMap;
 
-/// YAML front matter. Task 2 fills the fields; this task keeps the struct empty.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct FrontMatter;
+/// YAML front matter. Unknown or invalid YAML becomes [`FrontMatter::default`].
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FrontMatter {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub preset: Option<String>,
+    pub style: Option<toml::Table>,
+}
+
+/// Why [`crate::parse_front_matter`] rejected a YAML document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontMatterError {
+    message: String,
+}
+
+impl FrontMatterError {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for FrontMatterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for FrontMatterError {}
 
 /// A 1-based inclusive span of source lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,10 +42,20 @@ pub struct SourceRange {
     pub end_line: u32,
 }
 
-/// Inline content. This task stores only the plain text of a node.
+/// Inline content. Markdown text is stored here and later emitted as Typst
+/// string literals, never as spliced markup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inline {
     Text(String),
+    Code(String),
+    Emph(Vec<Inline>),
+    Strong(Vec<Inline>),
+    Strike(Vec<Inline>),
+    Link { url: String, content: Vec<Inline> },
+    Image { url: String, alt: String },
+    SoftBreak,
+    HardBreak,
+    FootnoteRef(String),
 }
 
 /// One item of a list, including an optional GFM task checkbox.
@@ -96,7 +133,7 @@ impl Block {
 }
 
 /// A parsed document. Parsing never fails: unrecognised input becomes text.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Doc {
     pub front_matter: FrontMatter,
     pub blocks: Vec<Block>,

@@ -5,6 +5,7 @@ fn text_of(inlines: &[Inline]) -> String {
     for inline in inlines {
         match inline {
             Inline::Text(text) => out.push_str(text),
+            other => panic!("block tests expect plain text, got {other:?}"),
         }
     }
     out
