@@ -2,3 +2,7 @@ target/
 *.pdf
 *.docx
 !fixtures/**/*.pdf
+
+# local Claude Code settings and executor scratch
+.claude/settings.local.json
+.superpowers/
