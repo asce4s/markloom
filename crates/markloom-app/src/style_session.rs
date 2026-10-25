@@ -47,40 +47,46 @@ impl StyleSession {
         self.set_preset(default_preset);
     }
 
-    /// Set `typography.base_size`.
-    pub fn set_base_size_pt(&mut self, points: f32) {
-        self.set_path(
-            &["typography", "base_size"],
-            Value::String(format!("{points}pt")),
-        );
+    /// Set one override. Numeric segments are array indexes.
+    pub fn set(&mut self, path: &str, value: Value) {
+        let segments = segments(path);
+        if segments.is_empty() {
+            return;
+        }
+        let mut root = Value::Table(std::mem::take(&mut self.overrides));
+        write_at(&mut root, &segments, value);
+        self.overrides = take_table(root);
     }
 
-    /// Set `colors.text` from `#rrggbb`.
-    pub fn set_text_color(&mut self, hex: &str) {
-        self.set_path(&["colors", "text"], Value::String(hex.to_string()));
+    /// Remove the override at `prefix` and every override under it.
+    pub fn clear(&mut self, prefix: &str) {
+        let segments = segments(prefix);
+        if segments.is_empty() {
+            self.overrides.clear();
+            return;
+        }
+        let mut root = Value::Table(std::mem::take(&mut self.overrides));
+        let _ = remove_at(&mut root, &segments);
+        prune(&mut root);
+        self.overrides = take_table(root);
     }
 
-    /// Set `table.borders`.
-    pub fn set_table_borders(&mut self, name: &str) {
-        self.set_path(&["table", "borders"], Value::String(name.to_string()));
+    /// Drop every override.
+    pub fn clear_all(&mut self) {
+        self.overrides.clear();
     }
 
-    /// Set `diagram.theme`.
-    pub fn set_diagram_theme(&mut self, name: &str) {
-        self.set_path(&["diagram", "theme"], Value::String(name.to_string()));
-    }
-
-    /// Set `diagram.scale`.
-    pub fn set_diagram_scale(&mut self, scale: f32) {
-        self.set_path(&["diagram", "scale"], float_value(scale));
-    }
-
-    /// Set the first body font.
-    pub fn set_body_font(&mut self, font: &str) {
-        self.set_path(
-            &["typography", "body_font"],
-            Value::Array(vec![Value::String(font.to_string())]),
-        );
+    /// Whether `prefix` or something under it is overridden.
+    pub fn is_overridden(&self, prefix: &str) -> bool {
+        let segments = segments(prefix);
+        if segments.is_empty() {
+            return !self.overrides.is_empty();
+        }
+        let head = segments[0];
+        let Some(child) = self.overrides.get(head) else {
+            return false;
+        };
+        lookup(child, &segments[1..]).is_some()
     }
 
     /// Write the resolved sheet as a user preset.
@@ -94,31 +100,152 @@ impl StyleSession {
         let path = dir.join(format!("{name}.toml"));
         std::fs::write(path, text).map_err(|error| format!("write preset: {error}"))
     }
+}
 
-    fn set_path(&mut self, path: &[&str], value: Value) {
-        let mut table = &mut self.overrides;
-        for (index, key) in path.iter().enumerate() {
-            if index + 1 == path.len() {
-                table.insert((*key).to_string(), value);
-                return;
-            }
-            let entry = table
-                .entry((*key).to_string())
-                .or_insert_with(|| Value::Table(toml::Table::new()));
-            match entry {
-                Value::Table(next) => table = next,
-                other => {
-                    *other = Value::Table(toml::Table::new());
-                    let Value::Table(next) = other else {
-                        return;
-                    };
-                    table = next;
-                }
-            }
-        }
+fn segments(path: &str) -> Vec<&str> {
+    path.split('.').filter(|part| !part.is_empty()).collect()
+}
+
+fn take_table(value: Value) -> toml::Table {
+    match value {
+        Value::Table(table) => table,
+        _ => toml::Table::new(),
     }
 }
 
-fn float_value(value: f32) -> Value {
-    Value::Float(f64::from(value))
+fn write_at(cursor: &mut Value, segments: &[&str], value: Value) {
+    let Some(head) = segments.first().copied() else {
+        *cursor = value;
+        return;
+    };
+    let rest = &segments[1..];
+    if let Ok(index) = head.parse::<usize>() {
+        if !matches!(cursor, Value::Array(_)) {
+            *cursor = Value::Array(Vec::new());
+        }
+        let Value::Array(items) = cursor else {
+            return;
+        };
+        if index >= items.len() {
+            items.resize(index + 1, Value::String(String::new()));
+        }
+        if rest.is_empty() {
+            items[index] = value;
+        } else {
+            write_at(&mut items[index], rest, value);
+        }
+        return;
+    }
+    if !matches!(cursor, Value::Table(_)) {
+        *cursor = Value::Table(toml::Table::new());
+    }
+    let Value::Table(table) = cursor else {
+        return;
+    };
+    if rest.is_empty() {
+        table.insert(head.to_string(), value);
+        return;
+    }
+    let wants_array = rest[0].parse::<usize>().is_ok();
+    let entry = table.entry(head.to_string()).or_insert_with(|| {
+        if wants_array {
+            Value::Array(Vec::new())
+        } else {
+            Value::Table(toml::Table::new())
+        }
+    });
+    if wants_array && !matches!(entry, Value::Array(_)) {
+        *entry = Value::Array(Vec::new());
+    }
+    if !wants_array && !matches!(entry, Value::Table(_)) {
+        *entry = Value::Table(toml::Table::new());
+    }
+    write_at(entry, rest, value);
+}
+
+fn remove_at(cursor: &mut Value, segments: &[&str]) -> bool {
+    let Some(head) = segments.first().copied() else {
+        return true;
+    };
+    let rest = &segments[1..];
+    if let Ok(index) = head.parse::<usize>() {
+        let Value::Array(items) = cursor else {
+            return false;
+        };
+        if index >= items.len() {
+            return items.is_empty();
+        }
+        if rest.is_empty() {
+            items.remove(index);
+            return items.is_empty();
+        }
+        if remove_at(&mut items[index], rest) {
+            items.remove(index);
+        }
+        return items.is_empty();
+    }
+    let Value::Table(table) = cursor else {
+        return false;
+    };
+    if rest.is_empty() {
+        table.remove(head);
+        return table.is_empty();
+    }
+    let Some(child) = table.get_mut(head) else {
+        return table.is_empty();
+    };
+    if remove_at(child, rest) {
+        table.remove(head);
+    }
+    table.is_empty()
+}
+
+fn prune(value: &mut Value) {
+    match value {
+        Value::Table(table) => {
+            let keys: Vec<String> = table.keys().cloned().collect();
+            for key in keys {
+                if let Some(child) = table.get_mut(&key) {
+                    prune(child);
+                }
+                let empty = match table.get(&key) {
+                    Some(Value::Table(child)) => child.is_empty(),
+                    Some(Value::Array(child)) => child.is_empty(),
+                    _ => false,
+                };
+                if empty {
+                    table.remove(&key);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                prune(item);
+            }
+        }
+        Value::String(_)
+        | Value::Integer(_)
+        | Value::Float(_)
+        | Value::Boolean(_)
+        | Value::Datetime(_) => {}
+    }
+}
+
+fn lookup<'a>(cursor: &'a Value, segments: &[&str]) -> Option<&'a Value> {
+    let Some(head) = segments.first().copied() else {
+        return Some(cursor);
+    };
+    let rest = &segments[1..];
+    if let Ok(index) = head.parse::<usize>() {
+        let Value::Array(items) = cursor else {
+            return None;
+        };
+        let child = items.get(index)?;
+        return lookup(child, rest);
+    }
+    let Value::Table(table) = cursor else {
+        return None;
+    };
+    let child = table.get(head)?;
+    lookup(child, rest)
 }

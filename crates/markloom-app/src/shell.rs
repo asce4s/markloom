@@ -27,6 +27,7 @@ use markloom_mermaid::DiagramService;
 use markloom_style::{PresetRegistry, StyleSheet};
 use markloom_typeset::{Compiled, Diag, Engine, EngineOptions, PdfMeta, Severity};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use toml::Value;
 
 actions!(
     markloom,
@@ -1338,7 +1339,9 @@ impl StylePanel {
             |this, _slider, event: &SliderEvent, _window, cx| {
                 if let SliderEvent::Change(SliderValue::Single(value)) = event {
                     this.session.update(cx, |session, cx| {
-                        session.style.set_base_size_pt(*value);
+                        session
+                            .style
+                            .set("typography.base_size", Value::String(format!("{value}pt")));
                         session.schedule(cx);
                     });
                 }
@@ -1351,7 +1354,9 @@ impl StylePanel {
             |this, _slider, event: &SliderEvent, _window, cx| {
                 if let SliderEvent::Change(SliderValue::Single(value)) = event {
                     this.session.update(cx, |session, cx| {
-                        session.style.set_diagram_scale(*value);
+                        session
+                            .style
+                            .set("diagram.scale", Value::Float(f64::from(*value)));
                         session.schedule(cx);
                     });
                 }
@@ -1365,7 +1370,7 @@ impl StylePanel {
                 if let ColorPickerEvent::Change(Some(color)) = event {
                     let hex = hex_of(*color);
                     this.session.update(cx, |session, cx| {
-                        session.style.set_text_color(&hex);
+                        session.style.set("colors.text", Value::String(hex.clone()));
                         session.schedule(cx);
                     });
                 }
@@ -1455,7 +1460,9 @@ impl Render for StylePanel {
                 .on_click(move |_event, _window, cx| {
                     let label = label.clone();
                     session.update(cx, |session, cx| {
-                        session.style.set_body_font(&label);
+                        session
+                            .style
+                            .set("typography.body_font.0", Value::String(label.clone()));
                         session.schedule(cx);
                     });
                 })
@@ -1548,9 +1555,13 @@ fn choice_row(session: &Entity<Session>, kind: &str, names: &[&str]) -> impl Int
                 let kind = kind.clone();
                 session.update(cx, |session, cx| {
                     if kind == "borders" {
-                        session.style.set_table_borders(&label);
+                        session
+                            .style
+                            .set("table.borders", Value::String(label.clone()));
                     } else {
-                        session.style.set_diagram_theme(&label);
+                        session
+                            .style
+                            .set("diagram.theme", Value::String(label.clone()));
                     }
                     session.schedule(cx);
                 });
