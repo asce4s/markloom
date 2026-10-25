@@ -54,6 +54,33 @@ impl StyleState {
         self.registry.names()
     }
 
+    /// The override at `path`, when it is a string.
+    pub fn override_text(&self, path: &str) -> Option<String> {
+        let root = Value::Table(self.session.overrides().clone());
+        let mut cursor = &root;
+        for part in path.split('.') {
+            cursor = match cursor {
+                Value::Table(table) => table.get(part)?,
+                Value::Array(items) => items.get(part.parse::<usize>().ok()?)?,
+                _ => return None,
+            };
+        }
+        match cursor {
+            Value::String(text) => Some(text.clone()),
+            _ => None,
+        }
+    }
+
+    /// Read `*.toml` presets from `dir` into the registry.
+    pub fn load_user_presets(&mut self, dir: &std::path::Path) {
+        let _ = self.registry.load_user_dir(dir);
+    }
+
+    /// Write the resolved sheet. The caller adds `extends` when it wants inheritance.
+    pub fn save_preset(&self, dir: &std::path::Path, name: &str) -> Result<(), String> {
+        self.session.save_preset(dir, name, &self.sheet)
+    }
+
     /// Whether `prefix` or something under it is overridden.
     pub fn is_overridden(&self, prefix: &str) -> bool {
         self.session.is_overridden(prefix)

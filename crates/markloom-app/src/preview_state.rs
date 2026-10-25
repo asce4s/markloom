@@ -215,7 +215,14 @@ impl PreviewState {
         self.sync = sync;
     }
 
-    /// Preview status for the status bar.
+    /// Family names from the engine, once it exists.
+    pub fn font_families(&self) -> Vec<String> {
+        self.engine
+            .as_ref()
+            .map(|engine| engine.lock().expect("engine lock").font_families())
+            .unwrap_or_default()
+    }
+
     pub fn status(&self) -> &PreviewStatus {
         &self.status
     }

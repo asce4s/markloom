@@ -1,9 +1,15 @@
 //! Wordmark, file name, and the quiet actions on the top row.
 
+use gpui_kit::base::ElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, h_flex};
-use gpui_kit::{App, Context, Entity, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui_kit::{
+    App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement, SharedString,
+    Styled, div, px,
+};
+
+use crate::probe;
 
 use crate::app::{AppRoot, ExportDocx, ExportPdf, FindInFiles, OpenPath, QuickOpen};
 use crate::document::Document;
@@ -42,7 +48,14 @@ pub fn top_bar(
                 .outline()
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenPath), cx)),
         )
-        .child(more_menu(app.clone()))
+        .child(
+            div()
+                .id("more")
+                .flex()
+                .flex_none()
+                .on_prepaint(|bounds, _, _| probe::record("more", bounds))
+                .child(more_menu(app.clone())),
+        )
         .child(Button::new("theme").label(theme_glyph).ghost().on_click({
             let app = app.clone();
             move |_, window, cx| {
@@ -73,7 +86,7 @@ fn file_name(document: &Entity<Document>, cx: &App) -> String {
 }
 
 fn more_menu(app: Entity<AppRoot>) -> impl IntoElement {
-    Button::new("more")
+    Button::new("more-button")
         .label("⋯")
         .ghost()
         .dropdown_menu(move |menu, _, _| {
@@ -96,7 +109,13 @@ fn more_menu(app: Entity<AppRoot>) -> impl IntoElement {
                 window.dispatch_action(Box::new(ExportDocx), cx);
             }))
             .item(
-                PopupMenuItem::new("Save style as preset…").on_click(move |_, window, cx| {
+                PopupMenuItem::element(|_, _| {
+                    div()
+                        .id("save-preset")
+                        .on_prepaint(|bounds, _, _| probe::record("save-preset", bounds))
+                        .child("Save style as preset…")
+                })
+                .on_click(move |_, window, cx| {
                     preset.update(cx, |app, cx| app.save_style_as_preset(window, cx));
                 }),
             )

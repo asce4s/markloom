@@ -16,6 +16,7 @@ use gpui_kit::{
 use crate::document::Document;
 use crate::preview_pipeline::{self, Zoom, visible_span};
 use crate::preview_state::PreviewState;
+use crate::probe;
 use crate::style_state::StyleState;
 use crate::views::status::{self, paper_label, preview_text};
 
@@ -32,9 +33,11 @@ pub fn view(
     let count = preview.read(cx).page_count().unwrap_or(0);
     let (left, danger) = preview_text(preview.read(cx).status());
     let paper = paper_label(style.read(cx).sheet());
+    let paper_probe = paper.clone();
     v_flex()
         .size_full()
         .bg(cx.theme().background)
+        .on_prepaint(move |_, _, _| probe::set_text("preview-paper", paper_probe.clone()))
         .child(header(preview.clone(), on_sync, cx))
         .child(
             div()

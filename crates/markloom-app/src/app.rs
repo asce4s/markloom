@@ -57,6 +57,7 @@ pub struct AppRoot {
     pending: Option<Pending>,
     pending_path: Option<PathBuf>,
     allow_close: bool,
+    preset_error: Option<String>,
     _document: Subscription,
     _preview: Subscription,
     _style: Subscription,
@@ -101,7 +102,8 @@ impl AppRoot {
             spawn_engine(preview.clone(), cx);
         }
         let files = cx.new(|cx| FilesColumn::new(document.clone(), cx));
-        let settings_column = cx.new(|_| SettingsColumn::new(style.clone()));
+        let settings_column =
+            cx.new(|cx| SettingsColumn::new(style.clone(), preview.clone(), window, cx));
         let document_sub = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
             if let DocumentEvent::CursorLineChanged(line) = event
                 && this.preview.read(cx).sync_scroll()
@@ -126,6 +128,7 @@ impl AppRoot {
             pending: None,
             pending_path: None,
             allow_close: false,
+            preset_error: None,
             _document: document_sub,
             _preview: preview_sub,
             _style: style_sub,
@@ -178,8 +181,64 @@ impl AppRoot {
         cx.notify();
     }
 
-    /// Task 8 opens the name dialog. The menu item is already wired.
-    pub fn save_style_as_preset(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+    /// Ask for a preset name, then write it beside the settings file.
+    pub fn save_style_as_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preset_error = None;
+        let name = cx.new(|cx| {
+            gpui_kit::component::input::InputState::new(window, cx).placeholder("Preset name")
+        });
+        let app = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let field = name.clone();
+            let confirm = app.clone();
+            let named = name.clone();
+            let message = app
+                .upgrade()
+                .and_then(|root| root.read(cx).preset_error.clone());
+            dialog
+                .title("Save style as preset")
+                .child(preset_name(field))
+                .child(preset_error(message, cx))
+                .footer(DialogFooter::new().child(preset_confirm(confirm, named)))
+        });
+    }
+
+    fn commit_preset(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let name = name.trim();
+        if BUILTIN_PRESETS.contains(&name) {
+            self.preset_error = Some("Choose a name that isn't a built-in preset".into());
+            cx.notify();
+            return;
+        }
+        if name.is_empty() || name.contains(['/', '\\']) {
+            self.preset_error = Some("preset name is empty".into());
+            cx.notify();
+            return;
+        }
+        let dir = self
+            .settings_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("presets");
+        let current = self.style.read(cx).preset().to_string();
+        if let Err(error) = self.style.read(cx).save_preset(&dir, name) {
+            self.preset_error = Some(error);
+            cx.notify();
+            return;
+        }
+        let path = dir.join(format!("{name}.toml"));
+        if let Ok(body) = std::fs::read_to_string(&path)
+            && !body.contains("extends")
+        {
+            let _ = std::fs::write(&path, format!("extends = \"{current}\"\n{body}"));
+        }
+        self.style.update(cx, |style, cx| {
+            style.load_user_presets(&dir);
+            style.set_preset(name, cx);
+        });
+        self.preset_error = None;
+        window.close_dialog(cx);
+    }
 
     pub fn new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = fresh_name(self.document.read(cx).workspace().files());
@@ -557,6 +616,61 @@ fn spawn_engine(preview: Entity<PreviewState>, cx: &mut Context<AppRoot>) {
         preview.update(cx, |preview, cx| preview.set_engine(engine, cx));
     })
     .detach();
+}
+
+const BUILTIN_PRESETS: &[&str] = &[
+    "github",
+    "compact",
+    "academic",
+    "minimal",
+    "print-friendly",
+    "corporate",
+];
+
+fn preset_name(name: gpui_kit::Entity<gpui_kit::component::input::InputState>) -> impl IntoElement {
+    div()
+        .id("preset-name")
+        .on_prepaint(|bounds, _, _| probe::record("preset-name", bounds))
+        .on_mouse_down(gpui_kit::MouseButton::Left, {
+            let name = name.clone();
+            move |_, window, cx| {
+                name.read(cx).focus_handle(cx).focus(window, cx);
+            }
+        })
+        .child(gpui_kit::component::input::Input::new(&name))
+}
+
+fn preset_error(message: Option<String>, cx: &App) -> impl IntoElement {
+    let shown = message.clone().unwrap_or_default();
+    div()
+        .id("preset-error")
+        .min_h(px(20.))
+        .text_sm()
+        .text_color(cx.theme().danger)
+        .on_prepaint(move |bounds, _, _| {
+            probe::record("preset-error", bounds);
+            probe::set_text("preset-error", shown.clone());
+        })
+        .child(message.unwrap_or_default())
+}
+
+fn preset_confirm(
+    app: gpui_kit::WeakEntity<AppRoot>,
+    name: gpui_kit::Entity<gpui_kit::component::input::InputState>,
+) -> impl IntoElement {
+    div()
+        .id("confirm-preset")
+        .on_prepaint(|bounds, _, _| probe::record("confirm-preset", bounds))
+        .child(
+            Button::new("confirm-preset-button")
+                .label("Save")
+                .primary()
+                .on_click(move |_, window, cx| {
+                    let text = name.read(cx).value().to_string();
+                    app.update(cx, |app, cx| app.commit_preset(&text, window, cx))
+                        .ok();
+                }),
+        )
 }
 
 fn prompt_copy(title: String) -> impl IntoElement {
