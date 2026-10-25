@@ -16,3 +16,8 @@ typst-render.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+png.workspace = true
+
+[[bench]]
+name = "recompile"
+harness = false
