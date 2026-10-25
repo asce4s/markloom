@@ -46,8 +46,9 @@ pub fn export_docx(
     dest: &Path,
 ) -> Result<(), DocxError> {
     let mut body = Vec::new();
+    let walk = root_walk(style, base_dir, diagrams);
     for block in &doc.blocks {
-        push_block(&mut body, block, style, base_dir, diagrams, 0, None);
+        push_block(&mut body, block, walk);
     }
     if !doc.footnotes.is_empty() {
         body.push(Body::Paragraph(Box::new(
@@ -60,7 +61,7 @@ pub fn export_docx(
                 Paragraph::new().add_run(Run::new().add_text(format!("[{name}] "))),
             )));
             for block in blocks {
-                push_block(&mut body, block, style, base_dir, diagrams, 0, None);
+                push_block(&mut body, block, walk);
             }
         }
     }
@@ -125,53 +126,83 @@ enum ListKind {
     Ordered,
 }
 
-fn push_block(
-    body: &mut Vec<Body>,
-    block: &Block,
-    style: &StyleSheet,
-    base_dir: &Path,
-    diagrams: &DiagramService,
+#[derive(Clone, Copy)]
+struct Walk<'a> {
+    style: &'a StyleSheet,
+    base_dir: &'a Path,
+    diagrams: &'a DiagramService,
     depth: usize,
     list: Option<ListKind>,
-) {
+    quoted: bool,
+    prefix: Option<&'static str>,
+}
+
+fn root_walk<'a>(
+    style: &'a StyleSheet,
+    base_dir: &'a Path,
+    diagrams: &'a DiagramService,
+) -> Walk<'a> {
+    Walk {
+        style,
+        base_dir,
+        diagrams,
+        depth: 0,
+        list: None,
+        quoted: false,
+        prefix: None,
+    }
+}
+
+fn push_block(body: &mut Vec<Body>, block: &Block, ctx: Walk<'_>) {
     match block {
         Block::Heading { level, content, .. } => {
             let style_id = format!("Heading{}", level.clamp(&1, &6));
             body.push(Body::Paragraph(Box::new(paragraph(
                 content,
-                style,
-                base_dir,
+                ctx.style,
+                ctx.base_dir,
                 Some(style_id),
-                list_numbering(list, depth),
+                list_numbering(ctx.list, ctx.depth),
+                ctx.prefix,
             ))));
         }
         Block::Paragraph { content, .. } => {
+            let style_id = ctx.quoted.then(|| "Quote".to_string());
             body.push(Body::Paragraph(Box::new(paragraph(
                 content,
-                style,
-                base_dir,
-                None,
-                list_numbering(list, depth),
+                ctx.style,
+                ctx.base_dir,
+                style_id,
+                list_numbering(ctx.list, ctx.depth),
+                ctx.prefix,
             ))));
         }
         Block::Code { code, .. } => {
+            let style_name = if ctx.quoted { "Quote" } else { "Code" };
             for (index, line) in code.lines().enumerate() {
-                let mut paragraph = Paragraph::new().style("Code");
-                if index == 0
-                    && let Some((id, level)) = list_numbering(list, depth)
-                {
-                    paragraph = paragraph.numbering(id, level);
+                let mut paragraph = Paragraph::new().style(style_name);
+                if index == 0 {
+                    if let Some((id, level)) = list_numbering(ctx.list, ctx.depth) {
+                        paragraph = paragraph.numbering(id, level);
+                    }
+                    if let Some(prefix) = ctx.prefix {
+                        paragraph = paragraph.add_run(Run::new().add_text(prefix));
+                    }
                 }
                 body.push(Body::Paragraph(Box::new(
                     paragraph.add_run(Run::new().add_text(line.to_string())),
                 )));
             }
             if code.is_empty() {
-                body.push(Body::Paragraph(Box::new(Paragraph::new().style("Code"))));
+                let mut paragraph = Paragraph::new().style(style_name);
+                if let Some(prefix) = ctx.prefix {
+                    paragraph = paragraph.add_run(Run::new().add_text(prefix));
+                }
+                body.push(Body::Paragraph(Box::new(paragraph)));
             }
         }
-        Block::Diagram { source, .. } => match diagrams.render(source, &style.diagram) {
-            Ok(svg) => match svg_png(svg.as_ref(), style.diagram.scale * 2.0) {
+        Block::Diagram { source, .. } => match ctx.diagrams.render(source, &ctx.style.diagram) {
+            Ok(svg) => match svg_png(svg.as_ref(), ctx.style.diagram.scale * 2.0) {
                 Ok(png) => body.push(Body::Paragraph(Box::new(image_paragraph(&png)))),
                 Err(message) => body.push(Body::Paragraph(Box::new(error_box(source, &message)))),
             },
@@ -181,10 +212,18 @@ fn push_block(
             )))),
         },
         Block::Quote { blocks, .. } => {
-            for inner in blocks {
-                push_block(body, inner, style, base_dir, diagrams, depth, list);
+            for (index, inner) in blocks.iter().enumerate() {
+                push_block(
+                    body,
+                    inner,
+                    Walk {
+                        quoted: true,
+                        list: if index == 0 { ctx.list } else { None },
+                        prefix: if index == 0 { ctx.prefix } else { None },
+                        ..ctx
+                    },
+                );
             }
-            restyle_quote(body);
         }
         Block::List { ordered, items, .. } => {
             let kind = if *ordered {
@@ -193,21 +232,16 @@ fn push_block(
                 ListKind::Bullet
             };
             for item in items {
-                push_item(
-                    body,
-                    item,
-                    ItemCtx {
-                        style,
-                        base_dir,
-                        diagrams,
-                        depth,
-                        kind,
-                    },
-                );
+                push_item(body, item, ctx, kind);
             }
         }
         Block::Table { header, rows, .. } => {
-            body.push(Body::Table(Box::new(table(header, rows, style, base_dir))));
+            body.push(Body::Table(Box::new(table(
+                header,
+                rows,
+                ctx.style,
+                ctx.base_dir,
+            ))));
         }
         Block::Rule { .. } => {
             body.push(Body::Paragraph(Box::new(
@@ -217,70 +251,34 @@ fn push_block(
     }
 }
 
-fn restyle_quote(body: &mut [Body]) {
-    if let Some(Body::Paragraph(paragraph)) = body.last_mut() {
-        **paragraph = paragraph.clone().style("Quote");
-    }
-}
-
-struct ItemCtx<'a> {
-    style: &'a StyleSheet,
-    base_dir: &'a Path,
-    diagrams: &'a DiagramService,
-    depth: usize,
-    kind: ListKind,
-}
-
-fn push_item(body: &mut Vec<Body>, item: &ListItem, ctx: ItemCtx<'_>) {
-    let before = body.len();
+fn push_item(body: &mut Vec<Body>, item: &ListItem, ctx: Walk<'_>, kind: ListKind) {
+    let prefix = match item.checked {
+        Some(true) => Some("[x] "),
+        Some(false) => Some("[ ] "),
+        None => None,
+    };
     if item.blocks.is_empty() {
-        body.push(Body::Paragraph(Box::new(Paragraph::new())));
+        body.push(Body::Paragraph(Box::new(paragraph(
+            &[],
+            ctx.style,
+            ctx.base_dir,
+            None,
+            list_numbering(Some(kind), ctx.depth),
+            prefix,
+        ))));
+        return;
     }
     for (index, block) in item.blocks.iter().enumerate() {
-        let list = if index == 0 { Some(ctx.kind) } else { None };
         push_block(
             body,
             block,
-            ctx.style,
-            ctx.base_dir,
-            ctx.diagrams,
-            ctx.depth,
-            list,
+            Walk {
+                list: if index == 0 { Some(kind) } else { None },
+                prefix: if index == 0 { prefix } else { None },
+                ..ctx
+            },
         );
     }
-    if let Some(checked) = item.checked
-        && let Some(Body::Paragraph(paragraph)) = body.get_mut(before)
-    {
-        let mark = if checked { "[x] " } else { "[ ] " };
-        **paragraph = Paragraph::new()
-            .add_run(Run::new().add_text(mark))
-            .add_run(Run::new().add_text(paragraph_preview(item)));
-    }
-}
-
-fn paragraph_preview(item: &ListItem) -> String {
-    fn inline_text(inlines: &[Inline], out: &mut String) {
-        for inline in inlines {
-            match inline {
-                Inline::Text(text) | Inline::Code(text) => out.push_str(text),
-                Inline::Emph(inner) | Inline::Strong(inner) | Inline::Strike(inner) => {
-                    inline_text(inner, out);
-                }
-                Inline::Link { content, .. } => inline_text(content, out),
-                Inline::Image { alt, .. } => out.push_str(alt),
-                Inline::SoftBreak => out.push(' '),
-                Inline::HardBreak => out.push('\n'),
-                Inline::FootnoteRef(name) => out.push_str(&format!("[{name}]")),
-            }
-        }
-    }
-    let mut text = String::new();
-    for block in &item.blocks {
-        if let Block::Paragraph { content, .. } = block {
-            inline_text(content, &mut text);
-        }
-    }
-    text
 }
 
 fn list_numbering(list: Option<ListKind>, depth: usize) -> Option<(NumberingId, IndentLevel)> {
@@ -298,6 +296,7 @@ fn paragraph(
     base_dir: &Path,
     style_id: Option<String>,
     numbering: Option<(NumberingId, IndentLevel)>,
+    prefix: Option<&str>,
 ) -> Paragraph {
     let mut paragraph = Paragraph::new();
     if let Some(style_id) = style_id {
@@ -305,6 +304,9 @@ fn paragraph(
     }
     if let Some((id, level)) = numbering {
         paragraph = paragraph.numbering(id, level);
+    }
+    if let Some(prefix) = prefix {
+        paragraph = paragraph.add_run(Run::new().add_text(prefix));
     }
     write_inlines(&mut paragraph, content, style, base_dir);
     paragraph
@@ -476,7 +478,7 @@ fn row(
             } else if zebra && let Some(color) = style.table.zebra {
                 cell = cell.shading(Shading::new().fill(hex(color)));
             }
-            let mut paragraph = paragraph(content, style, base_dir, None, None);
+            let mut paragraph = paragraph(content, style, base_dir, None, None, None);
             if header && style.table.header_bold {
                 paragraph = paragraph.add_run(Run::new().bold());
             }

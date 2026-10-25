@@ -95,6 +95,33 @@ fn diagram_is_embedded_as_png() {
     assert!(found, "diagram png missing");
 }
 
+#[test]
+fn quote_styles_every_paragraph() {
+    let dir = tempfile_dir("quote");
+    let dest = export("> one\n>\n> two\n", &dir);
+    let document = xml(&dest, "word/document.xml");
+    assert!(document.contains("one"));
+    assert!(document.contains("two"));
+    assert!(
+        document.matches("Quote").count() >= 2,
+        "both paragraphs should use Quote: {document}"
+    );
+}
+
+#[test]
+fn task_checkbox_keeps_marks() {
+    let dir = tempfile_dir("task");
+    let dest = export("- [x] **done** and *more*\n", &dir);
+    let document = xml(&dest, "word/document.xml");
+    assert!(document.contains("[x]"));
+    assert!(document.contains("done"));
+    assert!(document.contains("more"));
+    assert!(
+        document.contains("<w:b/>") || document.contains("<w:b ") || document.contains("<w:b>"),
+        "bold mark missing: {document}"
+    );
+}
+
 fn tempfile_dir(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("markloom-docx-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
