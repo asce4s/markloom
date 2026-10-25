@@ -96,8 +96,11 @@ pub(crate) fn write_pdf(
 ) -> Result<(), ExportError> {
     let bytes = pdf_bytes(document, meta)?;
     let temporary = path.with_extension("pdf.tmp");
-    std::fs::write(&temporary, bytes).map_err(|error| ExportError::new(error.to_string()))?;
-    std::fs::rename(&temporary, path).map_err(|error| ExportError::new(error.to_string()))?;
+    std::fs::write(&temporary, &bytes).map_err(|error| ExportError::new(error.to_string()))?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(ExportError::new(error.to_string()));
+    }
     Ok(())
 }
 

@@ -203,6 +203,27 @@ fn write_pdf_replaces_via_tmp() {
 }
 
 #[test]
+fn write_pdf_removes_tmp_when_rename_fails() {
+    let compiled = compile("# Hello\n");
+    let dir = std::env::temp_dir().join(format!("markloom-pdf-rename-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("out.pdf");
+    std::fs::create_dir(&path).expect("dest dir");
+    let error = compiled
+        .write_pdf(
+            &path,
+            &PdfMeta {
+                title: None,
+                author: None,
+            },
+        )
+        .expect_err("rename onto a directory");
+    assert!(!error.to_string().is_empty());
+    assert!(!dir.join("out.pdf.tmp").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn empty_document_compiles_to_one_page() {
     assert_eq!(compile("").page_count(), 1);
     assert_eq!(compile("---\ntitle: x\n---\n").page_count(), 1);
