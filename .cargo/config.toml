@@ -1,0 +1,4 @@
+# typst-kit's scan-fonts feature builds yeslogic-fontconfig-sys. This process
+# looks the library up at runtime, so the build does not need fontconfig.pc.
+[env]
+RUST_FONTCONFIG_DLOPEN = "1"

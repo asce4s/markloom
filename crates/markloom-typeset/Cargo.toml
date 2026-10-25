@@ -8,6 +8,11 @@ publish.workspace = true
 markloom-core = { path = "../markloom-core" }
 markloom-style = { path = "../markloom-style" }
 markloom-mermaid = { path = "../markloom-mermaid" }
+typst.workspace = true
+typst-kit = { workspace = true, features = ["scan-fonts"] }
+typst-layout.workspace = true
+typst-pdf.workspace = true
+typst-render.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
