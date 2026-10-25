@@ -228,6 +228,31 @@ fn open_folder_with_dirty_buffer_prompts(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn save_failure_keeps_the_window(cx: &mut TestAppContext) {
+    let note = scratch("hello\n");
+    let harness = open(cx, &note, None);
+    cx.update_window(harness.window, |_, window, cx| {
+        let document = harness.app.read(cx).document().clone();
+        let root_before = document.read(cx).workspace().root().to_path_buf();
+        document.update(cx, |document, cx| {
+            document.set_value("dirty", window, cx);
+        });
+        press(window, "ctrl-o", cx);
+        frame(window, cx);
+        std::fs::remove_file(&note).unwrap();
+        std::fs::create_dir(&note).unwrap();
+        click(window, "save-changes", cx);
+        assert_eq!(document.read(cx).text(), "dirty");
+        assert_eq!(document.read(cx).workspace().root(), root_before.as_path());
+        assert!(
+            painted("unsaved-prompt") || probe::text("notice").is_some(),
+            "a failed save stays in the window and says why"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn preview_scroll_not_overridden(cx: &mut TestAppContext) {
     let note = scratch("hello\n");
     let harness = open(cx, &note, Some(engine()));
@@ -289,6 +314,65 @@ fn preview_scroll_not_overridden(cx: &mut TestAppContext) {
         (later - offset).abs() < 1.0,
         "blinking must not pull the preview back: {offset} became {later}"
     );
+}
+
+#[gpui_kit::test]
+fn unknown_default_preset_notifies(cx: &mut TestAppContext) {
+    let note = scratch("hello\n");
+    let settings = markloom_app::settings::Settings {
+        default_preset: "nope".into(),
+        ..markloom_app::settings::Settings::default()
+    };
+    markloom_app::settings::save(&settings_path(&note), &settings).unwrap();
+    let harness = open(cx, &note, None);
+    cx.update_window(harness.window, |_, window, cx| {
+        frame(window, cx);
+        assert_eq!(harness.app.read(cx).style().read(cx).preset(), "github");
+        let notice = probe::text("notice").unwrap_or_default();
+        assert!(notice.contains("github"), "{notice}");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn user_preset_is_selected_at_startup(cx: &mut TestAppContext) {
+    let note = scratch("hello\n");
+    let presets = note.parent().unwrap().join("presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    std::fs::write(presets.join("mine.toml"), "extends = \"github\"\n").unwrap();
+    let settings = markloom_app::settings::Settings {
+        default_preset: "mine".into(),
+        ..markloom_app::settings::Settings::default()
+    };
+    markloom_app::settings::save(&settings_path(&note), &settings).unwrap();
+    let harness = open(cx, &note, None);
+    cx.update_window(harness.window, |_, window, cx| {
+        frame(window, cx);
+        assert_eq!(harness.app.read(cx).style().read(cx).preset(), "mine");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn non_utf8_open_sets_a_notice(cx: &mut TestAppContext) {
+    let note = scratch("hello\n");
+    std::fs::write(note.parent().unwrap().join("bad.md"), [0xff, 0xfe, 0x00]).unwrap();
+    let harness = open(cx, &note, None);
+    cx.update_window(harness.window, |_, window, cx| {
+        let document = harness.app.read(cx).document().clone();
+        let error = document.update(cx, |document, cx| {
+            document.open_file(Path::new("bad.md"), window, cx)
+        });
+        assert!(error.is_err());
+    })
+    .unwrap();
+    cx.update_window(harness.window, |_, window, cx| {
+        frame(window, cx);
+        let notice = probe::text("notice").unwrap_or_default();
+        assert!(notice.contains("UTF-8"), "{notice}");
+        assert_eq!(harness.app.read(cx).document().read(cx).text(), "hello\n");
+    })
+    .unwrap();
 }
 
 fn scroll_y(handle: &gpui_kit::UniformListScrollHandle) -> f32 {

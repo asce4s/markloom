@@ -32,6 +32,7 @@ pub struct PreviewState {
     document: Entity<Document>,
     style: Entity<StyleState>,
     engine: Option<Arc<Mutex<Engine>>>,
+    fonts: Vec<String>,
     compiled: Option<Compiled>,
     held: HashMap<PageKey, Arc<RenderImage>>,
     show: Vec<(usize, PageKey)>,
@@ -75,7 +76,9 @@ impl PreviewState {
 
     /// Replace a missing engine and compile. Font discovery stays with the caller.
     pub fn set_engine(&mut self, engine: Engine, cx: &mut Context<Self>) {
-        self.engine = Some(Arc::new(Mutex::new(engine)));
+        let engine = Arc::new(Mutex::new(engine));
+        self.fonts = font_snapshot(&engine);
+        self.engine = Some(engine);
         self.schedule(cx);
     }
 
@@ -163,12 +166,15 @@ impl PreviewState {
 
     /// Step to the next larger zoom and keep the images already on screen.
     pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
-        self.set_zoom(preview_pipeline::zoom_in(self.zoom, 100.0), cx);
+        self.set_zoom(preview_pipeline::zoom_in(self.zoom, self.fit_percent()), cx);
     }
 
     /// Step to the next smaller zoom and keep the images already on screen.
     pub fn zoom_out(&mut self, cx: &mut Context<Self>) {
-        self.set_zoom(preview_pipeline::zoom_out(self.zoom, 100.0), cx);
+        self.set_zoom(
+            preview_pipeline::zoom_out(self.zoom, self.fit_percent()),
+            cx,
+        );
     }
 
     /// Switch zoom. Old images stay until the new scale replaces them.
@@ -206,13 +212,30 @@ impl PreviewState {
         Some(y_px.max(0.0) / logical)
     }
 
-    /// Remember the preview canvas size. Fit zoom reads it on the next raster.
-    pub fn set_viewport(&mut self, width: f32, height: f32) {
+    /// Remember the preview canvas size. Fit modes raster again.
+    pub fn set_viewport(&mut self, width: f32, height: f32, cx: &mut Context<Self>) {
         if (self.viewport_w - width).abs() < 0.5 && (self.viewport_h - height).abs() < 0.5 {
             return;
         }
         self.viewport_w = width.max(1.0);
         self.viewport_h = height.max(1.0);
+        if matches!(self.zoom, Zoom::FitWidth | Zoom::FitPage) {
+            self.start_raster(self.generation, cx);
+        }
+    }
+
+    /// Window scale. Raster size includes it; the zoom steps stay logical.
+    pub fn set_hidpi(&mut self, scale: f32, cx: &mut Context<Self>) {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        if (self.hidpi - scale).abs() < 0.01 {
+            return;
+        }
+        self.hidpi = scale;
+        self.start_raster(self.generation, cx);
     }
 
     /// Follow the caret only while this is on.
@@ -225,12 +248,11 @@ impl PreviewState {
         self.sync = sync;
     }
 
-    /// Family names from the engine, once it exists.
+    /// Family names captured when the engine was installed.
+    ///
+    /// This does not lock the engine, so a compile can hold that mutex.
     pub fn font_families(&self) -> Vec<String> {
-        self.engine
-            .as_ref()
-            .map(|engine| engine.lock().expect("engine lock").font_families())
-            .unwrap_or_default()
+        self.fonts.clone()
     }
 
     pub fn status(&self) -> &PreviewStatus {
@@ -270,10 +292,12 @@ impl PreviewState {
                 this.schedule(cx);
             }
         });
+        let fonts = engine.as_ref().map(font_snapshot).unwrap_or_default();
         Self {
             document,
             style,
             engine,
+            fonts,
             compiled: None,
             held: HashMap::new(),
             show: Vec::new(),
@@ -434,6 +458,25 @@ impl PreviewState {
         Some(plan_raster(&held, &hashes, self.visible, self.scale_bits))
     }
 
+    /// Logical fit size. Zoom steps compare against this, not the hidpi raster.
+    fn fit_percent(&self) -> f32 {
+        let Some(compiled) = &self.compiled else {
+            return 100.0;
+        };
+        if compiled.page_count() == 0 {
+            return 100.0;
+        }
+        let (page_w, page_h) = compiled.page_size_pt(0);
+        pixels_per_pt(
+            self.zoom,
+            self.viewport_w,
+            self.viewport_h,
+            page_w,
+            page_h,
+            1.0,
+        ) * 100.0
+    }
+
     fn scale(&self) -> f32 {
         let Some(compiled) = &self.compiled else {
             return 1.0;
@@ -485,6 +528,10 @@ impl CompileJob {
         let mut engine = self.engine.lock().expect("engine lock");
         engine.compile(&doc, &self.style, &self.base)
     }
+}
+
+fn font_snapshot(engine: &Arc<Mutex<Engine>>) -> Vec<String> {
+    engine.lock().expect("engine lock").font_families()
 }
 
 fn render_page(compiled: &Compiled, index: usize, scale: f32) -> Option<Arc<RenderImage>> {

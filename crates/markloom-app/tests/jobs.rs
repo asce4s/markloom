@@ -156,3 +156,23 @@ fn search_is_cached(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn search_burst_runs_once(cx: &mut TestAppContext) {
+    let note = scratch("hello world\n");
+    let app = open(cx, &note, false);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.find("h", cx);
+            app.find("he", cx);
+        });
+    });
+    advance(cx, 200);
+    cx.update(|cx| {
+        assert_eq!(
+            app.read(cx).search_starts(),
+            1,
+            "keystrokes inside the debounce start one search"
+        );
+    });
+}

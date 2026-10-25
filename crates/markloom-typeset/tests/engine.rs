@@ -97,6 +97,27 @@ fn custom_typst_infinite_loop_is_an_error() {
 }
 
 #[test]
+fn custom_typst_counting_loop_hits_the_limit() {
+    let mut style = github();
+    style.custom.typst = "#let n = 0\n#while n < 999999999 {\n  n = n + 1\n}".into();
+    let started = Instant::now();
+    let failure = engine()
+        .compile(&parse("Hi\n"), &style, Path::new("."))
+        .expect_err("a counting loop must stop");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "elapsed {:?}",
+        started.elapsed()
+    );
+    let message = &failure.diagnostics[0].message;
+    assert!(message.starts_with("Custom Typst: "), "{message}");
+    assert!(
+        message.contains("infinite"),
+        "the iteration cap must fire, got {message}"
+    );
+}
+
+#[test]
 fn diagram_count_includes_diagram_blocks() {
     let compiled = compile("```mermaid\ngraph TD; A-->B\n```\n");
     assert_eq!(compiled.diagram_count, 1);

@@ -50,10 +50,12 @@ pub fn view(
                     move |bounds, window, cx| {
                         let width = bounds.size.width.as_f32();
                         let height = bounds.size.height.as_f32();
+                        let hidpi = window.scale_factor();
                         let span = visible_pages(&scroll, count);
                         window.defer(cx, move |_, cx| {
                             preview.update(cx, |preview, cx| {
-                                preview.set_viewport(width, height);
+                                preview.set_hidpi(hidpi, cx);
+                                preview.set_viewport(width, height, cx);
                                 if let Some(span) = span {
                                     preview.set_visible(span, cx);
                                 }

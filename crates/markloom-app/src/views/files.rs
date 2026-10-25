@@ -4,14 +4,17 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::base::ElementExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::tree::{self, TreeItem, TreeState};
-use gpui_kit::component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::{ActiveTheme as _, WindowExt as _, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement, Render,
-    Styled, Subscription, Window, div, px,
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement,
+    Render, Styled, Subscription, Window, div, px,
 };
 
 use crate::document::{Document, DocumentEvent};
@@ -96,17 +99,84 @@ impl Render for FilesColumn {
     }
 }
 
-fn file_menu(menu: PopupMenu, id: &str, document: Entity<Document>) -> PopupMenu {
+/// Context-menu labels for one tree id. Folders have none.
+pub fn file_action_labels(id: &str) -> &'static [&'static str] {
     if id.ends_with('/') {
-        return menu;
+        &[]
+    } else {
+        &["Rename", "Delete"]
     }
-    let path = PathBuf::from(id);
-    menu.item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
-        let path = path.clone();
-        document.update(cx, |document, cx| {
-            let _ = document.delete_file(&path, window, cx);
-        });
-    }))
+}
+
+fn file_menu(menu: PopupMenu, id: &str, document: Entity<Document>) -> PopupMenu {
+    let mut menu = menu;
+    for label in file_action_labels(id) {
+        let path = PathBuf::from(id);
+        let document = document.clone();
+        menu = match *label {
+            "Rename" => menu.item(PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
+                ask_rename(path.clone(), document.clone(), window, cx);
+            })),
+            "Delete" => menu.item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
+                let path = path.clone();
+                document.update(cx, |document, cx| {
+                    let _ = document.delete_file(&path, window, cx);
+                });
+            })),
+            _ => menu,
+        };
+    }
+    menu
+}
+
+fn ask_rename(from: PathBuf, document: Entity<Document>, window: &mut Window, cx: &mut App) {
+    let current = from
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = cx.new(|cx| InputState::new(window, cx).default_value(current));
+    window.open_dialog(cx, move |dialog, _, _| {
+        let field = name.clone();
+        let typed = name.clone();
+        let document = document.clone();
+        let from = from.clone();
+        dialog
+            .title("Rename")
+            .child(
+                div()
+                    .id("rename-name")
+                    .on_prepaint(|bounds, _, _| probe::record("rename-name", bounds))
+                    .child(Input::new(&field)),
+            )
+            .footer(
+                DialogFooter::new().child(
+                    div()
+                        .id("confirm-rename")
+                        .on_prepaint(|bounds, _, _| probe::record("confirm-rename", bounds))
+                        .child(
+                            Button::new("confirm-rename-button")
+                                .label("Rename")
+                                .primary()
+                                .on_click(move |_, window, cx| {
+                                    let text = typed.read(cx).value().trim().to_string();
+                                    let to = rename_target(&from, &text);
+                                    document.update(cx, |document, cx| {
+                                        let _ = document.rename_file(&from, &to, window, cx);
+                                    });
+                                    window.close_dialog(cx);
+                                }),
+                        ),
+                ),
+            )
+    });
+}
+
+fn rename_target(from: &Path, text: &str) -> PathBuf {
+    if text.contains('/') || text.contains('\\') {
+        PathBuf::from(text)
+    } else {
+        from.parent().unwrap_or(Path::new("")).join(text)
+    }
 }
 
 fn items_under(files: &[PathBuf], prefix: &Path) -> Vec<TreeItem> {

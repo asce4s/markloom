@@ -9,8 +9,10 @@ use gpui_kit::{
     Window, WindowBounds, WindowOptions, div, px, size,
 };
 use markloom_app::document::{Document, DocumentEvent};
+use markloom_app::preview_pipeline::Zoom;
 use markloom_app::preview_state::PreviewState;
 use markloom_app::style_state::StyleState;
+use markloom_app::workspace::DiskEvent;
 use markloom_mermaid::DiagramService;
 use markloom_typeset::{Engine, EngineOptions};
 use toml::Value;
@@ -60,7 +62,7 @@ fn open(cx: &mut TestAppContext, path: &Path) -> Harness {
                 let doc = cx
                     .new(|cx| Document::open(path, window, cx).expect("open document"))
                     .clone();
-                let sheet = cx.new(|cx| StyleState::new("github", cx));
+                let sheet = cx.new(|cx| StyleState::new("github", None, cx));
                 let engine = Engine::new(
                     EngineOptions {
                         system_fonts: false,
@@ -266,4 +268,104 @@ fn replaced_images_are_dropped(cx: &mut TestAppContext) {
     });
     assert!(held <= visible + 2, "held {held}, visible {visible}");
     assert!(!still_held, "the replaced image is still held");
+}
+
+#[gpui_kit::test]
+fn fit_width_zoom_steps_from_the_page(cx: &mut TestAppContext) {
+    let harness = open(cx, &temp_file("# Hello\n"));
+    advance(cx, 200);
+    let zoom = harness.preview.update(cx, |preview, cx| {
+        preview.set_viewport(400.0, 800.0, cx);
+        preview.set_zoom(Zoom::FitWidth, cx);
+        preview.zoom_in(cx);
+        preview.zoom()
+    });
+    assert_eq!(
+        zoom,
+        Zoom::Percent(75.0),
+        "400px on A4 is about 67%, next step is 75"
+    );
+}
+
+#[gpui_kit::test]
+fn font_families_do_not_lock_the_engine(cx: &mut TestAppContext) {
+    let harness = open(cx, &temp_file("alpha\n"));
+    let families = harness.preview.update(cx, |preview, _| {
+        let engine = preview.engine_handle().expect("engine");
+        let _guard = engine.lock().expect("engine lock");
+        preview.font_families()
+    });
+    assert!(!families.is_empty(), "embedded fonts are snapshotted");
+}
+
+#[gpui_kit::test]
+fn reload_of_another_file_keeps_the_editor(cx: &mut TestAppContext) {
+    let note = temp_file("alpha\n");
+    let dir = note.parent().unwrap();
+    std::fs::write(dir.join("b.md"), "beta\n").unwrap();
+    let harness = open(cx, &note);
+    cx.update_window(harness.window, |_, window, cx| {
+        harness.document.update(cx, |document, cx| {
+            document
+                .open_file(Path::new("b.md"), window, cx)
+                .expect("open b");
+            document
+                .open_file(Path::new("note.md"), window, cx)
+                .expect("back to note");
+        });
+    })
+    .unwrap();
+    std::fs::write(dir.join("b.md"), "changed\n").unwrap();
+    let changed = dir.join("b.md");
+    cx.update_window(harness.window, |_, window, cx| {
+        let generation = harness.document.read(cx).generation();
+        harness.document.update(cx, |document, cx| {
+            document.apply_disk_event(DiskEvent::Modified(changed.clone()), window, cx);
+        });
+        assert_eq!(harness.document.read(cx).text(), "alpha\n");
+        assert_eq!(harness.document.read(cx).generation(), generation);
+        let other = harness
+            .document
+            .read(cx)
+            .workspace()
+            .buffers()
+            .iter()
+            .find(|buffer| buffer.relative == Path::new("b.md"))
+            .expect("b stays open");
+        assert_eq!(other.text, "changed\n");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn unknown_preset_falls_back_to_github(cx: &mut TestAppContext) {
+    let harness = open(cx, &temp_file("alpha\n"));
+    cx.update_window(harness.window, |_, _, cx| {
+        let style = cx.new(|cx| StyleState::new("nope", None, cx));
+        let (preset, notice) = style.update(cx, |style, _| {
+            (style.preset().to_string(), style.take_fallback())
+        });
+        assert_eq!(preset, "github");
+        let notice = notice.expect("fallback notice");
+        assert!(notice.contains("github"), "{notice}");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn user_preset_resolves_at_startup(cx: &mut TestAppContext) {
+    let note = temp_file("alpha\n");
+    let presets = note.parent().unwrap().join("presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    std::fs::write(presets.join("mine.toml"), "extends = \"github\"\n").unwrap();
+    let harness = open(cx, &note);
+    cx.update_window(harness.window, |_, _, cx| {
+        let style = cx.new(|cx| StyleState::new("mine", Some(presets.as_path()), cx));
+        let (preset, notice) = style.update(cx, |style, _| {
+            (style.preset().to_string(), style.take_fallback())
+        });
+        assert_eq!(preset, "mine");
+        assert!(notice.is_none());
+    })
+    .unwrap();
 }

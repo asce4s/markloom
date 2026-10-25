@@ -1,6 +1,6 @@
 //! The open workspace, its editor, and the cursor the preview follows.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use gpui_kit::component::input::{EditorState, InputEvent, Position};
@@ -127,9 +127,36 @@ impl Document {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        self.workspace.open_file(relative)?;
+        if let Err(error) = self.workspace.open_file(relative) {
+            cx.emit(DocumentEvent::Error(error.clone()));
+            return Err(error);
+        }
         let text = self.text().to_string();
         self.load_text(text, window, cx);
+        Ok(())
+    }
+
+    /// Rename a workspace file and keep the editor on the same buffer.
+    pub fn rename_file(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let active = self
+            .workspace
+            .active()
+            .map(|buffer| buffer.relative.clone());
+        if let Err(error) = self.workspace.rename(from, to) {
+            cx.emit(DocumentEvent::Error(error.clone()));
+            return Err(error);
+        }
+        if active.as_deref() == Some(from) || active.as_deref() == Some(to) {
+            let text = self.text().to_string();
+            self.load_text(text, window, cx);
+        }
+        cx.notify();
         Ok(())
     }
 
@@ -206,29 +233,80 @@ impl Document {
             return;
         };
         let events: Vec<_> = rx.try_iter().collect();
-        let mut reload = false;
+        let active_before = self
+            .workspace
+            .active()
+            .map(|buffer| buffer.relative.clone());
+        let mut reload_editor = false;
         for event in events {
             let kind = event.kind;
             for path in event.paths {
                 let Some(disk) = workspace::disk_event(kind, path) else {
                     continue;
                 };
-                match self.workspace.apply_disk(disk) {
-                    Ok(DiskChange::None) => {}
-                    Ok(DiskChange::Reloaded) => {
-                        reload = true;
-                        cx.emit(DocumentEvent::Reloaded);
-                    }
-                    Ok(DiskChange::Conflict) => cx.emit(DocumentEvent::Conflict),
-                    Ok(DiskChange::Removed) => {
-                        cx.emit(DocumentEvent::Error("File removed".into()));
-                    }
-                    Ok(DiskChange::Rescanned) => cx.notify(),
-                    Err(error) => cx.emit(DocumentEvent::Error(error)),
-                }
+                self.ingest(disk, &active_before, &mut reload_editor, cx);
             }
         }
-        if reload {
+        self.finish_watch(active_before, reload_editor, window, cx);
+    }
+
+    /// Apply one disk event the same way [`Self::drain_watch`] does.
+    pub fn apply_disk_event(
+        &mut self,
+        event: workspace::DiskEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active_before = self
+            .workspace
+            .active()
+            .map(|buffer| buffer.relative.clone());
+        let mut reload_editor = false;
+        self.ingest(event, &active_before, &mut reload_editor, cx);
+        self.finish_watch(active_before, reload_editor, window, cx);
+    }
+
+    fn ingest(
+        &mut self,
+        disk: workspace::DiskEvent,
+        active_before: &Option<PathBuf>,
+        reload_editor: &mut bool,
+        cx: &mut Context<Self>,
+    ) {
+        let relative = match &disk {
+            workspace::DiskEvent::Created(path)
+            | workspace::DiskEvent::Modified(path)
+            | workspace::DiskEvent::Removed(path) => self.workspace.relative_of(path),
+        };
+        match self.workspace.apply_disk(disk) {
+            Ok(DiskChange::None) => {}
+            Ok(DiskChange::Reloaded) => {
+                if relative.as_ref() == active_before.as_ref() {
+                    *reload_editor = true;
+                    cx.emit(DocumentEvent::Reloaded);
+                }
+            }
+            Ok(DiskChange::Conflict) => cx.emit(DocumentEvent::Conflict),
+            Ok(DiskChange::Removed) => {
+                cx.emit(DocumentEvent::Error("File removed".into()));
+            }
+            Ok(DiskChange::Rescanned) => cx.notify(),
+            Err(error) => cx.emit(DocumentEvent::Error(error)),
+        }
+    }
+
+    fn finish_watch(
+        &mut self,
+        active_before: Option<PathBuf>,
+        reload_editor: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let active_after = self
+            .workspace
+            .active()
+            .map(|buffer| buffer.relative.clone());
+        if reload_editor || active_before != active_after {
             let text = self.text().to_string();
             self.load_text(text, window, cx);
         }

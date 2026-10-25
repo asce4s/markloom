@@ -211,6 +211,15 @@ impl SettingsColumn {
             }
         }));
         subs.push(cx.observe(&style, |_, _, cx| cx.notify()));
+        subs.push(cx.observe(&preview, |this, preview, cx| {
+            let names = font_list(
+                preview.read(cx).font_families(),
+                this.style.read(cx).sheet(),
+            );
+            if names != this.font_names {
+                cx.notify();
+            }
+        }));
 
         Self {
             style,

@@ -1,5 +1,6 @@
 //! Preset plus overrides, resolved only when the style actually changes.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use gpui_kit::{Context, EventEmitter};
@@ -20,23 +21,47 @@ pub struct StyleState {
     registry: PresetRegistry,
     session: StyleSession,
     sheet: Arc<StyleSheet>,
+    /// Shown once when startup could not resolve the requested preset.
+    fallback: Option<String>,
 }
 
 impl EventEmitter<StyleEvent> for StyleState {}
 
 impl StyleState {
-    /// Start from a built-in preset with no overrides.
-    pub fn new(preset: impl Into<String>, _cx: &mut Context<Self>) -> Self {
-        let registry = PresetRegistry::builtin();
-        let session = StyleSession::new(preset);
-        let sheet = session
-            .resolve(&registry)
-            .expect("built-in preset resolves");
+    /// Start from `preset`. `presets_dir` is loaded first when it is set.
+    ///
+    /// An unknown or broken preset falls back to `github`. [`Self::take_fallback`]
+    /// returns the notice for that one case.
+    pub fn new(
+        preset: impl Into<String>,
+        presets_dir: Option<&Path>,
+        _cx: &mut Context<Self>,
+    ) -> Self {
+        let mut registry = PresetRegistry::builtin();
+        if let Some(dir) = presets_dir {
+            let _ = registry.load_user_dir(dir);
+        }
+        let mut session = StyleSession::new(preset);
+        let mut fallback = None;
+        let sheet = match session.resolve(&registry) {
+            Ok(sheet) => sheet,
+            Err(error) => {
+                fallback = Some(format!("{error} — using github"));
+                session.set_preset("github");
+                session.resolve(&registry).expect("github preset resolves")
+            }
+        };
         Self {
             registry,
             session,
             sheet: Arc::new(sheet),
+            fallback,
         }
+    }
+
+    /// Consume the startup fallback notice, if the requested preset did not resolve.
+    pub fn take_fallback(&mut self) -> Option<String> {
+        self.fallback.take()
     }
 
     /// Last sheet that resolved.

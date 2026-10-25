@@ -245,10 +245,21 @@ impl Workspace {
         self.check_relative(relative)?;
         let absolute = self.root.join(relative);
         trash.trash(&absolute)?;
-        self.buffers.retain(|buffer| buffer.relative != relative);
-        if self.active.is_some_and(|index| index >= self.buffers.len()) {
-            self.active = self.buffers.len().checked_sub(1);
+        let dirty = self
+            .buffers
+            .iter()
+            .any(|buffer| buffer.relative == relative && buffer.is_dirty());
+        if dirty {
+            if let Some(buffer) = self
+                .buffers
+                .iter_mut()
+                .find(|buffer| buffer.relative == relative)
+            {
+                buffer.missing = true;
+            }
+            return self.rescan();
         }
+        self.forget_buffer(relative);
         self.rescan()
     }
 
@@ -305,20 +316,24 @@ impl Workspace {
                     .buffers
                     .iter()
                     .any(|buffer| buffer.relative == relative);
-                if let Some(buffer) = self
+                let dirty = self
                     .buffers
-                    .iter_mut()
-                    .find(|buffer| buffer.relative == relative)
-                {
-                    if buffer.is_dirty() {
+                    .iter()
+                    .any(|buffer| buffer.relative == relative && buffer.is_dirty());
+                if dirty {
+                    if let Some(buffer) = self
+                        .buffers
+                        .iter_mut()
+                        .find(|buffer| buffer.relative == relative)
+                    {
                         buffer.missing = true;
-                    } else {
-                        let relative = relative.clone();
-                        self.buffers.retain(|buffer| buffer.relative != relative);
-                        if self.active.is_some_and(|index| index >= self.buffers.len()) {
-                            self.active = self.buffers.len().checked_sub(1);
-                        }
                     }
+                } else if self
+                    .buffers
+                    .iter()
+                    .any(|buffer| buffer.relative == relative)
+                {
+                    self.forget_buffer(&relative);
                 }
                 self.rescan()?;
                 Ok(if had_buffer {
@@ -334,7 +349,7 @@ impl Workspace {
                     return Ok(DiskChange::Rescanned);
                 };
                 let Ok(disk) = String::from_utf8(bytes) else {
-                    return Ok(DiskChange::None);
+                    return Err(format!("{} is not UTF-8 text", relative.display()));
                 };
                 let Some(buffer) = self
                     .buffers
@@ -383,7 +398,22 @@ impl Workspace {
         Ok(())
     }
 
-    fn relative_of(&self, path: &Path) -> Option<PathBuf> {
+    fn forget_buffer(&mut self, relative: &Path) {
+        let active_path = self.active().map(|buffer| buffer.relative.clone());
+        let active_index = self.active.unwrap_or(0);
+        self.buffers.retain(|buffer| buffer.relative != relative);
+        self.active = match active_path {
+            Some(path) if path.as_path() != relative => self
+                .buffers
+                .iter()
+                .position(|buffer| buffer.relative == path),
+            Some(_) if self.buffers.is_empty() => None,
+            Some(_) => Some(active_index.min(self.buffers.len() - 1)),
+            None => None,
+        };
+    }
+
+    pub(crate) fn relative_of(&self, path: &Path) -> Option<PathBuf> {
         path.strip_prefix(&self.root)
             .ok()
             .map(Path::to_path_buf)

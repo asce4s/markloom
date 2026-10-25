@@ -157,6 +157,63 @@ fn non_utf8_file_is_an_error() {
 }
 
 #[test]
+fn delete_before_active_keeps_that_file() {
+    let root = scratch("active-index");
+    fs::write(root.join("a.md"), "a\n").unwrap();
+    fs::write(root.join("b.md"), "b\n").unwrap();
+    fs::write(root.join("c.md"), "c\n").unwrap();
+    let mut workspace = Workspace::open(&root).unwrap();
+    workspace.open_file(Path::new("a.md")).unwrap();
+    workspace.open_file(Path::new("b.md")).unwrap();
+    workspace.open_file(Path::new("c.md")).unwrap();
+    workspace.select(1).unwrap();
+    let trash = MemoryTrash {
+        calls: Mutex::new(Vec::new()),
+    };
+    workspace.delete(Path::new("a.md"), &trash).unwrap();
+    assert_eq!(workspace.active().unwrap().relative, PathBuf::from("b.md"));
+    assert_eq!(workspace.active().unwrap().text, "b\n");
+}
+
+#[test]
+fn delete_of_dirty_buffer_keeps_the_text() {
+    let root = scratch("dirty-delete");
+    fs::write(root.join("a.md"), "saved\n").unwrap();
+    let mut workspace = Workspace::open(&root).unwrap();
+    workspace.open_file(Path::new("a.md")).unwrap();
+    workspace.set_text("unsaved\n");
+    let trash = MemoryTrash {
+        calls: Mutex::new(Vec::new()),
+    };
+    workspace.delete(Path::new("a.md"), &trash).unwrap();
+    let buffer = workspace.active().unwrap();
+    assert!(buffer.missing);
+    assert_eq!(buffer.text, "unsaved\n");
+}
+
+#[test]
+fn non_utf8_disk_edit_is_an_error() {
+    let root = scratch("utf8-disk");
+    fs::write(root.join("a.md"), "ok\n").unwrap();
+    let mut workspace = Workspace::open(&root).unwrap();
+    workspace.open_file(Path::new("a.md")).unwrap();
+    fs::write(root.join("a.md"), [0xff, 0xfe, 0x00]).unwrap();
+    let error = workspace
+        .apply_disk(DiskEvent::Modified(root.join("a.md")))
+        .expect_err("bad bytes");
+    assert!(error.contains("not UTF-8"), "{error}");
+    assert_eq!(workspace.active().unwrap().text, "ok\n");
+}
+
+#[test]
+fn file_menu_offers_rename() {
+    let labels = markloom_app::views::files::file_action_labels("a.md");
+    assert!(labels.contains(&"Rename"), "{labels:?}");
+    assert!(labels.contains(&"Delete"), "{labels:?}");
+    assert!(markloom_app::views::files::file_action_labels("docs/").is_empty());
+}
+
+#[test]
 fn settings_round_trip_and_recent_cap() {
     let root = scratch("settings");
     let path = root.join("settings.toml");

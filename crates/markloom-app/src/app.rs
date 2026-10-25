@@ -67,6 +67,9 @@ pub struct AppRoot {
     search_cache: Option<SearchCache>,
     search_gen: u64,
     search_runs: u64,
+    search_starts: u64,
+    notice: Option<String>,
+    notice_sent: bool,
     _search_input: Option<Subscription>,
     _document: Subscription,
     _preview: Subscription,
@@ -100,7 +103,10 @@ impl AppRoot {
                 .or_else(|_| Document::open(Path::new("."), window, cx))
                 .expect("open a folder")
         });
-        let style = cx.new(|cx| StyleState::new(settings.default_preset.clone(), cx));
+        let presets = settings_path.parent().map(|dir| dir.join("presets"));
+        let style =
+            cx.new(|cx| StyleState::new(settings.default_preset.clone(), presets.as_deref(), cx));
+        let startup_notice = style.update(cx, |style, _| style.take_fallback());
         let sync = settings.sync_scroll;
         let preview = match engine {
             Some(engine) => cx.new(|cx| {
@@ -122,17 +128,37 @@ impl AppRoot {
         let settings_column =
             cx.new(|cx| SettingsColumn::new(style.clone(), preview.clone(), window, cx));
         let document_sub = cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
-            if let DocumentEvent::CursorLineChanged(line) = event
-                && this.preview.read(cx).sync_scroll()
-                && let Some(page) = this.preview.read(cx).scroll_target(*line)
-            {
-                this.preview_scroll
-                    .scroll_to_item(page, gpui_kit::ScrollStrategy::Nearest);
+            match event {
+                DocumentEvent::CursorLineChanged(line) => {
+                    if this.preview.read(cx).sync_scroll()
+                        && let Some(page) = this.preview.read(cx).scroll_target(*line)
+                    {
+                        this.preview_scroll
+                            .scroll_to_item(page, gpui_kit::ScrollStrategy::Nearest);
+                    }
+                }
+                DocumentEvent::Error(message) => {
+                    this.notice = Some(message.clone());
+                    this.notice_sent = false;
+                }
+                DocumentEvent::TextChanged
+                | DocumentEvent::Saved
+                | DocumentEvent::Reloaded
+                | DocumentEvent::Conflict => {}
             }
             cx.notify();
         });
         let preview_sub = cx.observe(&preview, |_, _, cx| cx.notify());
-        let style_sub = cx.observe(&style, |_, _, cx| cx.notify());
+        let style_sub = cx.subscribe(
+            &style,
+            |this, _, event: &crate::style_state::StyleEvent, cx| {
+                if let crate::style_state::StyleEvent::Error(message) = event {
+                    this.notice = Some(message.clone());
+                    this.notice_sent = false;
+                }
+                cx.notify();
+            },
+        );
         let this = Self {
             document,
             style,
@@ -149,6 +175,9 @@ impl AppRoot {
             search_cache: None,
             search_gen: 0,
             search_runs: 0,
+            search_starts: 0,
+            notice: startup_notice,
+            notice_sent: false,
             _search_input: None,
             _document: document_sub,
             _preview: preview_sub,
@@ -365,9 +394,15 @@ impl AppRoot {
             return;
         }
         if save {
-            self.document.update(cx, |document, cx| {
-                let _ = document.save_dirty(cx);
-            });
+            let saved = self
+                .document
+                .update(cx, |document, cx| document.save_dirty(cx));
+            if let Err(error) = saved {
+                self.notice = Some(error);
+                self.notice_sent = false;
+                cx.notify();
+                return;
+            }
         }
         match pending {
             Some(Pending::Open) => self.pick_folder(cx),
@@ -453,6 +488,11 @@ impl AppRoot {
         self.search_runs
     }
 
+    /// How many search jobs were started after the debounce.
+    pub fn search_starts(&self) -> u64 {
+        self.search_starts
+    }
+
     /// Hits from the last finished query. Empty until that job applies.
     pub fn search_hits(&self) -> &[SearchHit] {
         self.search_cache
@@ -492,11 +532,29 @@ impl AppRoot {
             .filter(|path| !open_paths.contains(*path))
             .cloned()
             .collect();
-        let task = jobs::search(query.clone(), open, root.clone(), extra, cx);
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(150))
                 .await;
+            let task = this
+                .update(cx, |this, cx| {
+                    if this.search_gen != generation {
+                        return None;
+                    }
+                    this.search_starts = this.search_starts.wrapping_add(1);
+                    Some(jobs::search(
+                        query.clone(),
+                        open.clone(),
+                        root.clone(),
+                        extra.clone(),
+                        cx,
+                    ))
+                })
+                .ok()
+                .flatten();
+            let Some(task) = task else {
+                return;
+            };
             let hits = task.await;
             this.update(cx, |this, cx| {
                 if this.search_gen != generation {
@@ -595,6 +653,15 @@ impl AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         probe::clear();
+        if let Some(message) = self.notice.clone() {
+            probe::set_text("notice", message.clone());
+            if !self.notice_sent {
+                self.notice_sent = true;
+                window.defer(cx, move |window, cx| {
+                    window.push_notification(message, cx);
+                });
+            }
+        }
         self.apply_pending_path(window, cx);
         let document = self.document.clone();
         window.defer(cx, {
