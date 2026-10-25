@@ -41,6 +41,9 @@ actions!(
     ]
 );
 
+/// Gap under each preview page, inside the uniform row.
+const PAGE_GAP: f32 = 12.0;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ViewMode {
     Split,
@@ -61,7 +64,11 @@ struct Session {
     diagnostics: Vec<Diag>,
     images: Vec<Option<Arc<Image>>>,
     cache: PageCache,
-    scroll: ScrollHandle,
+    scroll: UniformListScrollHandle,
+    paint_token: u64,
+    raster_bits: u32,
+    dock: Option<WeakEntity<DockArea>>,
+    preview: Option<WeakEntity<PreviewPanel>>,
     zoom: Zoom,
     viewport: (f32, f32),
     hidpi: f32,
@@ -128,7 +135,11 @@ impl Session {
             diagnostics: Vec::new(),
             images: Vec::new(),
             cache: PageCache::default(),
-            scroll: ScrollHandle::new(),
+            scroll: UniformListScrollHandle::new(),
+            paint_token: 0,
+            raster_bits: 0,
+            dock: None,
+            preview: None,
             zoom: Zoom::Percent(100.0),
             viewport: (640.0, 800.0),
             hidpi: 1.0,
@@ -254,12 +265,16 @@ impl Session {
         self.diagnostics = compiled.warnings.clone();
         self.compiled_gen = generation;
         self.status = format!("{} pages", compiled.page_count()).into();
-        self.paint_pages(&compiled, cx);
         self.compiled = Some(compiled);
         self.push_diagnostics(cx);
+        self.queue_raster(cx);
     }
 
-    fn paint_pages(&mut self, compiled: &Compiled, _cx: &mut Context<Self>) {
+    /// Raster the visible pages off the UI thread. Cached pages stay put.
+    fn queue_raster(&mut self, cx: &mut Context<Self>) {
+        let Some(compiled) = self.compiled.clone() else {
+            return;
+        };
         let count = compiled.page_count();
         let (page_w, page_h) = compiled.page_size_pt(0);
         let scale = preview::pixels_per_pt(
@@ -275,26 +290,58 @@ impl Session {
             self.page_px = (page_w * scale, page_h * scale);
         }
         let bits = preview::scale_bits(scale);
+        if self.raster_bits != bits {
+            self.cache = PageCache::default();
+            self.images.clear();
+            self.raster_bits = bits;
+        }
         let (first, last) = self.visible;
         let range = preview::pages_to_rasterize(first, last, count);
         self.cache.retain_pages(|index| range.contains(&index));
         self.images.resize(count, None);
+        let mut pending = Vec::new();
         for index in range {
             let hash = compiled.page_hash(index);
-            let bytes = if let Some(hit) = self.cache.get(index, hash, bits) {
-                hit.to_vec()
+            if let Some(hit) = self.cache.get(index, hash, bits) {
+                self.images[index] =
+                    Some(Arc::new(Image::from_bytes(ImageFormat::Png, hit.to_vec())));
             } else {
-                let bitmap = compiled.render_page(index, scale);
-                match encode_png(&bitmap) {
-                    Ok(bytes) => {
-                        self.cache.insert(index, hash, bits, bytes.clone());
-                        bytes
-                    }
-                    Err(_) => continue,
-                }
-            };
-            self.images[index] = Some(Arc::new(Image::from_bytes(ImageFormat::Png, bytes)));
+                pending.push((index, hash));
+            }
         }
+        if pending.is_empty() {
+            return;
+        }
+        self.paint_token = self.paint_token.saturating_add(1);
+        let token = self.paint_token;
+        cx.spawn(async move |this, cx| {
+            let painted = cx
+                .background_spawn(async move {
+                    let mut painted = Vec::with_capacity(pending.len());
+                    for (index, hash) in pending {
+                        let bitmap = compiled.render_page(index, scale);
+                        if let Ok(bytes) = encode_png(&bitmap) {
+                            painted.push((index, hash, bytes));
+                        }
+                    }
+                    painted
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.paint_token != token || preview::scale_bits(this.last_scale) != bits {
+                    return;
+                }
+                for (index, hash, bytes) in painted {
+                    if index >= this.images.len() {
+                        continue;
+                    }
+                    this.cache.insert(index, hash, bits, bytes.clone());
+                    this.images[index] = Some(Arc::new(Image::from_bytes(ImageFormat::Png, bytes)));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn note_view(
@@ -305,8 +352,9 @@ impl Session {
         last: usize,
         cx: &mut Context<Self>,
     ) {
+        let viewport = (viewport.0.round(), viewport.1.round());
         let changed = self.viewport != viewport
-            || (self.hidpi - hidpi).abs() > f32::EPSILON
+            || (self.hidpi - hidpi).abs() > 0.01
             || self.visible != (first, last);
         self.viewport = viewport;
         self.hidpi = hidpi;
@@ -314,17 +362,13 @@ impl Session {
         if !changed {
             return;
         }
-        if let Some(compiled) = self.compiled.clone() {
-            self.paint_pages(&compiled, cx);
-            cx.notify();
-        }
+        self.queue_raster(cx);
+        cx.notify();
     }
 
     fn set_zoom(&mut self, zoom: Zoom, cx: &mut Context<Self>) {
         self.zoom = zoom;
-        if let Some(compiled) = self.compiled.clone() {
-            self.paint_pages(&compiled, cx);
-        }
+        self.queue_raster(cx);
         cx.notify();
     }
 
@@ -460,6 +504,13 @@ impl Session {
         cx.notify();
     }
 
+    fn page_for_line(&self, line: u32) -> Option<usize> {
+        self.source_lines
+            .iter()
+            .find(|(source, _, _)| *source == line)
+            .map(|(_, page, _)| *page)
+    }
+
     fn jump_to_line(&mut self, line: u32, window: &mut Window, cx: &mut Context<Self>) {
         self.editor.update(cx, |editor, cx| {
             editor.set_cursor_position(
@@ -471,14 +522,100 @@ impl Session {
                 cx,
             );
         });
-        if let Some((_, page, _)) = self
-            .source_lines
-            .iter()
-            .find(|(source, _, _)| *source == line)
-        {
-            self.scroll.scroll_to_item(*page);
-            self.status = format!("page {}", page + 1).into();
+        if let Some(page) = self.page_for_line(line) {
+            self.scroll.scroll_to_item(page, ScrollStrategy::Nearest);
+            let next = format!("page {}", page + 1);
+            if self.status.as_ref() != next {
+                self.status = next.into();
+            }
         }
+        if let Some(preview) = &self.preview {
+            let _ = preview.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    fn cycle_view(&mut self, cx: &mut Context<Self>) {
+        self.view = match self.view {
+            ViewMode::Split => ViewMode::Editor,
+            ViewMode::Editor => ViewMode::Preview,
+            ViewMode::Preview => ViewMode::Split,
+        };
+        if let Some(dock) = &self.dock {
+            let _ = dock.update(cx, |_, cx| cx.notify());
+        }
+        cx.notify();
+    }
+
+    fn open_root(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let workspace = match Workspace::open(&folder) {
+            Ok(workspace) => workspace,
+            Err(message) => {
+                self.status = message.into();
+                cx.notify();
+                return;
+            }
+        };
+        if workspace.root() == self.workspace.root() {
+            return;
+        }
+        let (watch_rx, watcher) = watch(workspace.root());
+        self.workspace = workspace;
+        self.watch_rx = watch_rx;
+        self._watcher = watcher;
+        self.compiled = None;
+        self.compiled_pages = 0;
+        self.source_lines.clear();
+        self.diagnostics.clear();
+        self.images.clear();
+        self.cache = PageCache::default();
+        self.raster_bits = 0;
+        self.paint_token = self.paint_token.saturating_add(1);
+        settings::remember(&mut self.settings, self.workspace.root());
+        let _ = settings::save(
+            &settings::config_dir().join("settings.toml"),
+            &self.settings,
+        );
+        if let Some(path) = self.workspace.files().first().cloned() {
+            let _ = self.workspace.open_file(&path);
+        }
+        self.sync_editor(window, cx);
+        self.schedule(cx);
+        self.status = format!("Opened {}", self.workspace.root().display()).into();
+        cx.notify();
+    }
+
+    fn rename_path(&mut self, from: &Path, to: &Path, cx: &mut Context<Self>) {
+        if from == to {
+            return;
+        }
+        match self.workspace.rename(from, to) {
+            Ok(()) => self.status = format!("Renamed {}", to.display()).into(),
+            Err(message) => self.status = message.into(),
+        }
+        cx.notify();
+    }
+
+    fn move_onto(&mut self, from: &Path, onto: &Path, cx: &mut Context<Self>) {
+        if from == onto {
+            return;
+        }
+        let Some(name) = from.file_name() else {
+            return;
+        };
+        let dest = onto.parent().unwrap_or(Path::new("")).join(name);
+        if dest == from {
+            return;
+        }
+        if self.workspace.files().iter().any(|path| path == &dest) {
+            self.status = format!("{} already exists", dest.display()).into();
+            cx.notify();
+            return;
+        }
+        match self.workspace.rename(from, &dest) {
+            Ok(()) => self.status = format!("Moved {}", dest.display()).into(),
+            Err(message) => self.status = message.into(),
+        }
+        cx.notify();
     }
 
     fn search_corpus(&self) -> Vec<(String, String)> {
@@ -518,6 +655,10 @@ impl Session {
             return;
         };
         let events: Vec<_> = rx.try_iter().collect();
+        if events.is_empty() {
+            return;
+        }
+        let mut changed = false;
         for event in events {
             for path in event.paths {
                 let hits_active = self
@@ -530,6 +671,7 @@ impl Session {
                 if self.workspace.apply_disk(disk).is_err() {
                     continue;
                 }
+                changed = true;
                 if hits_active
                     && self
                         .workspace
@@ -547,7 +689,9 @@ impl Session {
                 }
             }
         }
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 }
 
@@ -617,18 +761,63 @@ fn hex_of(color: Hsla) -> String {
     )
 }
 
+struct DragLabel {
+    label: SharedString,
+}
+
+impl Render for DragLabel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().px_2().py_1().child(self.label.clone())
+    }
+}
+
 struct FilesPanel {
     session: Entity<Session>,
     focus: FocusHandle,
+    renaming: Option<PathBuf>,
+    rename_editor: Entity<EditorState>,
 }
 
 impl FilesPanel {
-    fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
+    fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
         Self {
             session,
             focus: cx.focus_handle(),
+            renaming: None,
+            rename_editor: cx.new(|cx| EditorState::new(window, cx)),
         }
+    }
+
+    fn begin_rename(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_string();
+        self.renaming = Some(path);
+        self.rename_editor.update(cx, |editor, cx| {
+            editor.set_value(name, window, cx);
+            editor.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(from) = self.renaming.clone() else {
+            return;
+        };
+        let name = self.rename_editor.read(cx).value().to_string();
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let to = from.parent().unwrap_or(Path::new("")).join(name);
+        self.renaming = None;
+        self.session
+            .update(cx, |session, cx| session.rename_path(&from, &to, cx));
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 }
 
@@ -658,17 +847,34 @@ impl dock::Panel for FilesPanel {
 
 impl Render for FilesPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let session_ref = self.session.read(cx);
-        let files = session_ref.workspace.files().to_vec();
-        let active = session_ref
-            .workspace
-            .active()
-            .map(|buffer| buffer.relative.clone());
+        let (files, active, recent) = {
+            let session = self.session.read(cx);
+            (
+                session.workspace.files().to_vec(),
+                session
+                    .workspace
+                    .active()
+                    .map(|buffer| buffer.relative.clone()),
+                session.settings.recent.clone(),
+            )
+        };
+        if self
+            .renaming
+            .as_ref()
+            .is_some_and(|path| !files.contains(path))
+        {
+            self.renaming = None;
+        }
+        let renaming = self.renaming.clone();
         let session = self.session.clone();
+        let rename_editor = self.rename_editor.clone();
+        let panel = cx.entity();
         v_flex()
+            .id("files-scroll")
             .size_full()
             .p_2()
             .gap_1()
+            .overflow_y_scroll()
             .child({
                 let session = session.clone();
                 Button::new("new-file")
@@ -682,31 +888,118 @@ impl Render for FilesPanel {
                 let selected = active.as_ref() == Some(&path);
                 let session = session.clone();
                 let open = path.clone();
-                h_flex()
-                    .gap_1()
-                    .child({
-                        let session = session.clone();
-                        let open = open.clone();
-                        Button::new(ElementId::Name(format!("file-{label}").into()))
-                            .label(label.clone())
-                            .selected(selected)
-                            .on_click(move |_event, window, cx| {
-                                let open = open.clone();
-                                session.update(cx, |session, cx| {
-                                    session.open_relative(&open, window, cx)
-                                });
-                            })
+                let row_id = format!("row-{label}");
+                div()
+                    .id(ElementId::Name(row_id.into()))
+                    .on_drag(path.clone(), |dragged: &PathBuf, _point, _window, cx| {
+                        let label: SharedString = dragged.display().to_string().into();
+                        cx.new(|_| DragLabel { label })
                     })
-                    .child({
+                    .on_drop({
                         let session = session.clone();
-                        Button::new(ElementId::Name(format!("trash-{label}").into()))
-                            .label("Trash")
-                            .on_click(move |_event, window, cx| {
-                                let open = open.clone();
-                                session.update(cx, |session, cx| {
-                                    session.delete_relative(&open, window, cx);
-                                });
-                            })
+                        let onto = path.clone();
+                        move |dropped: &PathBuf, _window, cx| {
+                            let dropped = dropped.clone();
+                            let onto = onto.clone();
+                            session.update(cx, |session, cx| {
+                                session.move_onto(&dropped, &onto, cx);
+                            });
+                        }
+                    })
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .children(if renaming.as_ref() == Some(&path) {
+                                vec![
+                                    Editor::new(&rename_editor)
+                                        .w(px(120.))
+                                        .h(px(28.))
+                                        .into_any_element(),
+                                    {
+                                        let panel = panel.clone();
+                                        Button::new(ElementId::Name(format!("ok-{label}").into()))
+                                            .label("OK")
+                                            .on_click(move |_event, window, cx| {
+                                                panel.update(cx, |panel, cx| {
+                                                    panel.commit_rename(window, cx);
+                                                });
+                                            })
+                                            .into_any_element()
+                                    },
+                                    {
+                                        let panel = panel.clone();
+                                        Button::new(ElementId::Name(
+                                            format!("cancel-{label}").into(),
+                                        ))
+                                        .label("Cancel")
+                                        .on_click(move |_event, _window, cx| {
+                                            panel.update(cx, |panel, cx| {
+                                                panel.renaming = None;
+                                                cx.notify();
+                                            });
+                                        })
+                                        .into_any_element()
+                                    },
+                                ]
+                            } else {
+                                vec![
+                                    {
+                                        let session = session.clone();
+                                        let open = open.clone();
+                                        Button::new(ElementId::Name(format!("file-{label}").into()))
+                                            .label(label.clone())
+                                            .selected(selected)
+                                            .on_click(move |_event, window, cx| {
+                                                let open = open.clone();
+                                                session.update(cx, |session, cx| {
+                                                    session.open_relative(&open, window, cx);
+                                                });
+                                            })
+                                            .into_any_element()
+                                    },
+                                    {
+                                        let panel = panel.clone();
+                                        let open = open.clone();
+                                        Button::new(ElementId::Name(
+                                            format!("rename-{label}").into(),
+                                        ))
+                                        .label("Rename")
+                                        .on_click(move |_event, window, cx| {
+                                            let open = open.clone();
+                                            panel.update(cx, |panel, cx| {
+                                                panel.begin_rename(open, window, cx);
+                                            });
+                                        })
+                                        .into_any_element()
+                                    },
+                                    {
+                                        let session = session.clone();
+                                        Button::new(ElementId::Name(
+                                            format!("trash-{label}").into(),
+                                        ))
+                                        .label("Trash")
+                                        .on_click(move |_event, window, cx| {
+                                            let open = open.clone();
+                                            session.update(cx, |session, cx| {
+                                                session.delete_relative(&open, window, cx);
+                                            });
+                                        })
+                                        .into_any_element()
+                                    },
+                                ]
+                            }),
+                    )
+            }))
+            .child("Recent")
+            .children(recent.into_iter().enumerate().map(|(index, path)| {
+                let session = session.clone();
+                let folder = path.clone();
+                let label = path.display().to_string();
+                Button::new(ElementId::Name(format!("recent-{index}").into()))
+                    .label(label)
+                    .on_click(move |_event, window, cx| {
+                        let folder = folder.clone();
+                        session.update(cx, |session, cx| session.open_root(folder, window, cx));
                     })
             }))
     }
@@ -745,18 +1038,26 @@ impl EditorPanel {
         .detach();
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
         cx.observe(&editor, |this, editor, cx| {
-            let line = editor.read(cx).cursor_position().line;
-            this.session.update(cx, |session, cx| {
-                if let Some((_, page, _)) = session
-                    .source_lines
-                    .iter()
-                    .find(|(source, _, _)| *source == line + 1)
-                {
-                    session.status = format!("page {}", page + 1).into();
-                    session.scroll.scroll_to_item(*page);
+            let line = editor.read(cx).cursor_position().line.saturating_add(1);
+            let page = this.session.read(cx).page_for_line(line);
+            let preview = this.session.read(cx).preview.clone();
+            if let Some(page) = page {
+                this.session
+                    .read(cx)
+                    .scroll
+                    .scroll_to_item(page, ScrollStrategy::Nearest);
+                let next = format!("page {}", page + 1);
+                if this.session.read(cx).status.as_ref() != next {
+                    this.session.update(cx, |session, cx| {
+                        session.status = next.into();
+                        cx.notify();
+                    });
                 }
-                cx.notify();
-            });
+            }
+            if let Some(preview) = preview {
+                let _ = preview.update(cx, |_, cx| cx.notify());
+            }
+            cx.notify();
         })
         .detach();
         Self {
@@ -803,6 +1104,7 @@ impl Render for EditorPanel {
             });
         }
         let editor = self.session.read(cx).editor.clone();
+        let font = self.session.read(cx).settings.editor_font.clone();
         let buffers = self.session.read(cx).workspace.buffers().to_vec();
         let active = self.session.read(cx).workspace.active_index();
         let session = self.session.clone();
@@ -827,7 +1129,7 @@ impl Render for EditorPanel {
                             })
                     })),
             )
-            .child(Editor::new(&editor).h(relative(1.0)))
+            .child(Editor::new(&editor).font_family(font).h(relative(1.0)))
     }
 }
 
@@ -876,70 +1178,113 @@ impl dock::Panel for PreviewPanel {
 
 impl Render for PreviewPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let size = window.viewport_size();
-        let viewport = (size.width.as_f32().round(), size.height.as_f32().round());
         let hidpi = window.scale_factor();
         let scroll = self.session.read(cx).scroll.clone();
-        let first = scroll.top_item();
-        let last = scroll.bottom_item();
+        let page_px = self.session.read(cx).page_px;
+        let count = self.session.read(cx).compiled_pages;
+        let item_h = page_px.1 + PAGE_GAP;
+        let (bounds_w, bounds_h, offset_y) = {
+            let state = scroll.0.borrow();
+            let bounds = state.base_handle.bounds();
+            (
+                bounds.size.width.as_f32(),
+                bounds.size.height.as_f32(),
+                -state.base_handle.offset().y.as_f32(),
+            )
+        };
+        let mut viewport_w = bounds_w.round();
+        let mut viewport_h = bounds_h.round();
+        if viewport_w < 1.0 || viewport_h < 1.0 {
+            let size = window.viewport_size();
+            viewport_w = size.width.as_f32().round();
+            viewport_h = size.height.as_f32().round();
+        }
+        let (first, last) = preview::visible_span(offset_y.max(0.0), viewport_h, item_h, count);
         let unchanged = {
             let session = self.session.read(cx);
-            session.viewport == viewport
-                && (session.hidpi - hidpi).abs() <= f32::EPSILON
+            session.viewport == (viewport_w, viewport_h)
+                && (session.hidpi - hidpi).abs() <= 0.01
                 && session.visible == (first, last)
         };
         if !unchanged {
             let session = self.session.clone();
             cx.defer_in(window, move |_this, _window, cx| {
                 session.update(cx, |session, cx| {
-                    session.note_view(viewport, hidpi, first, last, cx);
+                    session.note_view((viewport_w, viewport_h), hidpi, first, last, cx);
                 });
             });
         }
         let images = self.session.read(cx).images.clone();
-        let page_px = self.session.read(cx).page_px;
         let zoom = self.session.read(cx).zoom;
         let session = self.session.clone();
+        let list_scroll = scroll.clone();
         v_flex()
             .size_full()
             .child(zoom_row(session.clone(), zoom))
             .child(
-                div()
-                    .id("preview-pages")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .track_scroll(&scroll)
-                    .p_4()
-                    .children(images.into_iter().enumerate().map(|(index, image)| {
+                uniform_list("preview-pages", count, move |range, _window, _cx| {
+                    let mut rows = Vec::with_capacity(range.len());
+                    for index in range {
+                        let image = images.get(index).cloned().flatten();
                         let session = session.clone();
-                        let scroll = scroll.clone();
-                        div()
-                            .id(ElementId::Name(format!("page-{index}").into()))
-                            .w(px(page_px.0.max(1.0)))
-                            .h(px(page_px.1.max(1.0)))
-                            .child(match image {
-                                Some(image) => img(image).max_w_full().into_any_element(),
-                                None => div().size_full().child("…").into_any_element(),
-                            })
-                            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                                let y = event.position.y.as_f32();
-                                let top = scroll
-                                    .bounds_for_item(index)
-                                    .map(|bounds| bounds.origin.y.as_f32())
-                                    .unwrap_or(y);
-                                session.update(cx, |session, cx| {
-                                    let scale = session.last_scale.max(0.25);
-                                    let y_pt = ((y - top) / scale).max(0.0);
-                                    if let Some((line, _, _)) =
-                                        session.source_lines.iter().rev().find(
-                                            |(_, page, point)| *page == index && *point <= y_pt,
-                                        )
-                                    {
-                                        session.jump_to_line(*line, window, cx);
+                        let scroll = list_scroll.clone();
+                        let page_w = page_px.0.max(1.0);
+                        let page_h = page_px.1.max(1.0);
+                        rows.push(
+                            div()
+                                .w(px(page_w))
+                                .h(px(page_h + PAGE_GAP))
+                                .id(ElementId::Name(format!("page-{index}").into()))
+                                .child(match image {
+                                    Some(image) => {
+                                        img(image).w(px(page_w)).h(px(page_h)).into_any_element()
                                     }
-                                });
-                            })
-                    })),
+                                    None => div()
+                                        .w(px(page_w))
+                                        .h(px(page_h))
+                                        .child("…")
+                                        .into_any_element(),
+                                })
+                                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                                    let y = event.position.y.as_f32();
+                                    let (origin_y, scrolled) = {
+                                        let state = scroll.0.borrow();
+                                        let bounds = state.base_handle.bounds();
+                                        (
+                                            bounds.origin.y.as_f32(),
+                                            -state.base_handle.offset().y.as_f32(),
+                                        )
+                                    };
+                                    let local = y - origin_y + scrolled;
+                                    session.update(cx, |session, cx| {
+                                        let item_h = session.page_px.1 + PAGE_GAP;
+                                        if item_h <= 1.0 {
+                                            return;
+                                        }
+                                        let page = (local / item_h).floor().max(0.0) as usize;
+                                        let y_in = local - page as f32 * item_h;
+                                        if y_in < 0.0 || y_in > session.page_px.1 {
+                                            return;
+                                        }
+                                        let y_pt = y_in / session.last_scale.max(0.25);
+                                        let Some(line) =
+                                            session.compiled.as_ref().and_then(|compiled| {
+                                                compiled.source_map.line_at(page, y_pt)
+                                            })
+                                        else {
+                                            return;
+                                        };
+                                        session.jump_to_line(line, window, cx);
+                                        cx.notify();
+                                    });
+                                }),
+                        );
+                    }
+                    rows
+                })
+                .flex_1()
+                .w_full()
+                .track_scroll(&scroll),
             )
     }
 }
@@ -1067,6 +1412,8 @@ impl Render for StylePanel {
         let names = self.session.read(cx).registry.names();
         let current = self.session.read(cx).style.preset().to_string();
         let fonts = self.session.read(cx).fonts.clone();
+        let editor_font = self.session.read(cx).settings.editor_font.clone();
+        let editor_fonts = mono_fonts(&fonts);
         let session = self.session.clone();
         let preset_buttons = names.into_iter().map(|name| {
             let session = session.clone();
@@ -1082,7 +1429,25 @@ impl Render for StylePanel {
                     });
                 })
         });
-        let font_buttons = fonts.into_iter().take(8).map(|font| {
+        let editor_buttons = editor_fonts.into_iter().map(|font| {
+            let session = session.clone();
+            let label = font.clone();
+            Button::new(ElementId::Name(format!("efont-{font}").into()))
+                .label(font.clone())
+                .selected(font == editor_font)
+                .on_click(move |_event, _window, cx| {
+                    let label = label.clone();
+                    session.update(cx, |session, cx| {
+                        session.settings.editor_font.clone_from(&label);
+                        let _ = settings::save(
+                            &settings::config_dir().join("settings.toml"),
+                            &session.settings,
+                        );
+                        cx.notify();
+                    });
+                })
+        });
+        let font_buttons = fonts.into_iter().take(80).map(|font| {
             let session = session.clone();
             let label = font.clone();
             Button::new(ElementId::Name(format!("font-{font}").into()))
@@ -1109,7 +1474,21 @@ impl Render for StylePanel {
                     .child(Slider::new(&self.scale).w(px(160.))),
             )
             .child(ColorPicker::new(&self.color))
-            .child(v_flex().gap_1().children(font_buttons))
+            .child(
+                v_flex()
+                    .gap_1()
+                    .w(px(180.))
+                    .child("Editor font")
+                    .children(editor_buttons)
+                    .child("Body font")
+                    .child(
+                        div()
+                            .id("body-fonts")
+                            .h(px(120.))
+                            .overflow_y_scroll()
+                            .child(v_flex().gap_1().children(font_buttons)),
+                    ),
+            )
             .child(choice_row(
                 &session,
                 "borders",
@@ -1212,15 +1591,15 @@ impl Shell {
         )
         .detach();
         let (dock, _skin) = DockSkin::dock_area("markloom", Some(1), window, cx);
-        let files = cx.new(|cx| FilesPanel::new(session.clone(), cx));
+        let files = cx.new(|cx| FilesPanel::new(session.clone(), window, cx));
         let editor_panel = cx.new(|cx| EditorPanel::new(session.clone(), window, cx));
         let preview = cx.new(|cx| PreviewPanel::new(session.clone(), cx));
         let style = cx.new(|cx| StylePanel::new(session.clone(), window, cx));
-        cx.observe(&session, |this, _, cx| {
-            this.dock.update(cx, |_, cx| cx.notify());
-            cx.notify();
-        })
-        .detach();
+        session.update(cx, |session, _cx| {
+            session.dock = Some(dock.downgrade());
+            session.preview = Some(preview.downgrade());
+        });
+        cx.observe(&session, |_, _, cx| cx.notify()).detach();
         dock.update(cx, |dock, cx| {
             dock.add_panel_view(
                 panel_handle(files),
@@ -1301,14 +1680,8 @@ impl Render for Shell {
                 this.session.update(cx, |session, cx| session.save(cx));
             }))
             .on_action(cx.listener(|this, _: &CycleView, _window, cx| {
-                this.session.update(cx, |session, cx| {
-                    session.view = match session.view {
-                        ViewMode::Split => ViewMode::Editor,
-                        ViewMode::Editor => ViewMode::Preview,
-                        ViewMode::Preview => ViewMode::Split,
-                    };
-                    cx.notify();
-                });
+                this.session
+                    .update(cx, |session, cx| session.cycle_view(cx));
             }))
             .on_action(cx.listener(|this, _: &ExportPdf, _window, cx| {
                 this.session
@@ -1352,12 +1725,7 @@ fn toolbar(session: Entity<Session>, status: SharedString) -> impl IntoElement {
         .p_1()
         .child(status)
         .child(command("view", "View", session.clone(), |session, cx| {
-            session.view = match session.view {
-                ViewMode::Split => ViewMode::Editor,
-                ViewMode::Editor => ViewMode::Preview,
-                ViewMode::Preview => ViewMode::Split,
-            };
-            cx.notify();
+            session.cycle_view(cx);
         }))
         .child(command(
             "pdf",
@@ -1386,6 +1754,27 @@ fn toolbar(session: Entity<Session>, status: SharedString) -> impl IntoElement {
                 &session.settings,
             );
         }))
+}
+
+fn mono_fonts(fonts: &[String]) -> Vec<String> {
+    let mono: Vec<String> = fonts
+        .iter()
+        .filter(|name| {
+            let lower = name.to_ascii_lowercase();
+            lower.contains("mono")
+                || lower.contains("code")
+                || lower.contains("consol")
+                || lower.contains("courier")
+                || lower.contains("typewriter")
+        })
+        .take(16)
+        .cloned()
+        .collect();
+    if mono.is_empty() {
+        fonts.iter().take(12).cloned().collect()
+    } else {
+        mono
+    }
 }
 
 fn command(

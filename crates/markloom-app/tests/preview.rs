@@ -1,5 +1,6 @@
 use markloom_app::preview::{
     DEBOUNCE, ExportGate, PageCache, Zoom, pages_to_rasterize, pixels_per_pt, scale_bits,
+    visible_span,
 };
 
 #[test]
@@ -21,6 +22,15 @@ fn raster_window_includes_neighbours() {
     assert_eq!(pages_to_rasterize(0, 0, 5), 0..2);
     assert_eq!(pages_to_rasterize(3, 4, 10), 2..6);
     assert_eq!(pages_to_rasterize(0, 0, 0), 0..0);
+}
+
+#[test]
+fn visible_span_follows_scroll_offset() {
+    assert_eq!(visible_span(0.0, 100.0, 50.0, 10), (0, 1));
+    assert_eq!(visible_span(75.0, 50.0, 50.0, 10), (1, 2));
+    assert_eq!(visible_span(0.0, 0.0, 50.0, 4), (0, 0));
+    assert_eq!(visible_span(1_000.0, 100.0, 50.0, 3), (2, 2));
+    assert_eq!(visible_span(0.0, 100.0, 50.0, 0), (0, 0));
 }
 
 #[test]
