@@ -1,21 +1,27 @@
 //! The application window: bars, columns, and the unsaved-changes prompt.
 
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::time::Duration;
 
 use gpui_kit::base::ElementExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{
     ActiveTheme as _, Theme, ThemeMode, WindowExt as _, h_resizable, resizable_panel, v_flex,
 };
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement, PathPromptOptions, Pixels, Render, Styled, Subscription,
-    UniformListScrollHandle, Window, WindowOptions, div, px,
+    AnyWindowHandle, App, AppContext as _, Context, Entity, Focusable as _,
+    InteractiveElement as _, IntoElement, ParentElement, PathPromptOptions, Pixels, Render, Styled,
+    Subscription, Task, UniformListScrollHandle, Window, WindowOptions, div, px,
 };
-use markloom_mermaid::DiagramService;
-use markloom_typeset::{Engine, EngineOptions};
+use markloom_style::StyleSheet;
+use markloom_typeset::{Engine, PdfMeta};
+
+use crate::jobs;
+use crate::search::SearchHit;
 
 use crate::document::{Document, DocumentEvent};
 use crate::preview_state::{PreviewState, PreviewStatus};
@@ -58,9 +64,20 @@ pub struct AppRoot {
     pending_path: Option<PathBuf>,
     allow_close: bool,
     preset_error: Option<String>,
+    search_cache: Option<SearchCache>,
+    search_gen: u64,
+    search_runs: u64,
+    _search_input: Option<Subscription>,
     _document: Subscription,
     _preview: Subscription,
     _style: Subscription,
+}
+
+struct SearchCache {
+    root: PathBuf,
+    query: String,
+    stamp: u64,
+    hits: Vec<SearchHit>,
 }
 
 impl AppRoot {
@@ -129,6 +146,10 @@ impl AppRoot {
             pending_path: None,
             allow_close: false,
             preset_error: None,
+            search_cache: None,
+            search_gen: 0,
+            search_runs: 0,
+            _search_input: None,
             _document: document_sub,
             _preview: preview_sub,
             _style: style_sub,
@@ -383,10 +404,10 @@ impl AppRoot {
 
     fn quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let document = self.document.clone();
-        let files = document.read(cx).workspace().files().to_vec();
+        let ranked = ranked_files(document.read(cx).workspace().files());
         window.open_dialog(cx, move |dialog, _, _| {
             let mut dialog = dialog.title("Quick open");
-            for file in files.clone() {
+            for file in ranked.clone() {
                 let document = document.clone();
                 let label = file.display().to_string();
                 dialog = dialog.child(
@@ -406,12 +427,126 @@ impl AppRoot {
         });
     }
 
-    fn find_in_files(&mut self, window: &mut Window, cx: &mut App) {
-        window.open_dialog(cx, |dialog, _, _| {
-            dialog
+    fn find_in_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let app = cx.entity().clone();
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Find in files"));
+        self._search_input = Some(cx.subscribe(&query, |this, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                let text = input.read(cx).value().to_string();
+                this.find(&text, cx);
+            }
+        }));
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let mut dialog = dialog
                 .title("Find in files")
                 .child("Results appear after you stop typing.")
+                .child(Input::new(&query));
+            for hit in app.read(cx).search_hits() {
+                dialog = dialog.child(format!("{}:{} {}", hit.path, hit.line, hit.text));
+            }
+            dialog
         });
+    }
+
+    /// How many search jobs have finished. A repeated query does not add one.
+    pub fn search_runs(&self) -> u64 {
+        self.search_runs
+    }
+
+    /// Hits from the last finished query. Empty until that job applies.
+    pub fn search_hits(&self) -> &[SearchHit] {
+        self.search_cache
+            .as_ref()
+            .map(|cache| cache.hits.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Debounced file search. The same query and workspace snapshot does not run again.
+    pub fn find(&mut self, query: &str, cx: &mut Context<Self>) {
+        let query = query.to_string();
+        let workspace = self.document.read(cx).workspace();
+        let root = workspace.root().to_path_buf();
+        let stamp = workspace_stamp(workspace);
+        if self
+            .search_cache
+            .as_ref()
+            .is_some_and(|cache| cache.root == root && cache.query == query && cache.stamp == stamp)
+        {
+            return;
+        }
+        self.search_gen = self.search_gen.wrapping_add(1);
+        let generation = self.search_gen;
+        let open: Vec<(String, String)> = workspace
+            .buffers()
+            .iter()
+            .map(|buffer| (buffer.relative.display().to_string(), buffer.text.clone()))
+            .collect();
+        let open_paths: HashSet<PathBuf> = workspace
+            .buffers()
+            .iter()
+            .map(|buffer| buffer.relative.clone())
+            .collect();
+        let extra: Vec<PathBuf> = workspace
+            .files()
+            .iter()
+            .filter(|path| !open_paths.contains(*path))
+            .cloned()
+            .collect();
+        let task = jobs::search(query.clone(), open, root.clone(), extra, cx);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(150))
+                .await;
+            let hits = task.await;
+            this.update(cx, |this, cx| {
+                if this.search_gen != generation {
+                    return;
+                }
+                this.search_runs = this.search_runs.wrapping_add(1);
+                this.search_cache = Some(SearchCache {
+                    root,
+                    query,
+                    stamp,
+                    hits,
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn export_pdf(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((dest, markdown, base)) = export_target(self, "pdf", cx) else {
+            window.push_notification("Nothing to export", cx);
+            return;
+        };
+        let handle = window.window_handle();
+        let task = if matches!(self.preview.read(cx).status(), PreviewStatus::Ready { .. }) {
+            let Some(compiled) = self.preview.read(cx).compiled().cloned() else {
+                window.push_notification("Nothing to export", cx);
+                return;
+            };
+            jobs::export_pdf(compiled, dest, PdfMeta::default(), cx)
+        } else if let Some(engine) = self.preview.read(cx).engine_handle() {
+            let style = StyleSheet::clone(self.style.read(cx).sheet());
+            jobs::export_fresh_pdf(engine, markdown, style, base, dest, PdfMeta::default(), cx)
+        } else {
+            window.push_notification("Fonts are still loading", cx);
+            return;
+        };
+        finish_export(handle, task, cx);
+    }
+
+    fn export_docx(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((dest, markdown, base)) = export_target(self, "docx", cx) else {
+            window.push_notification("Nothing to export", cx);
+            return;
+        };
+        let style = StyleSheet::clone(self.style.read(cx).sheet());
+        let handle = window.window_handle();
+        let task = jobs::export_docx(markdown, style, base, dest, cx);
+        finish_export(handle, task, cx);
     }
 
     fn remember_widths(&mut self, sizes: &[Pixels]) {
@@ -583,8 +718,18 @@ impl Render for AppRoot {
                     });
                 }
             })
-            .on_action(|_: &ExportPdf, _, _| {})
-            .on_action(|_: &ExportDocx, _, _| {})
+            .on_action({
+                let app = app.clone();
+                move |_: &ExportPdf, window, cx| {
+                    app.update(cx, |app, cx| app.export_pdf(window, cx));
+                }
+            })
+            .on_action({
+                let app = app.clone();
+                move |_: &ExportDocx, window, cx| {
+                    app.update(cx, |app, cx| app.export_docx(window, cx));
+                }
+            })
             .child(views::top_bar::top_bar(app, document, cx))
             .child(views::sub_bar::sub_bar(self.style.clone(), cx))
             .child(
@@ -604,18 +749,88 @@ impl Render for AppRoot {
 }
 
 fn spawn_engine(preview: Entity<PreviewState>, cx: &mut Context<AppRoot>) {
+    let task = jobs::load_engine(cx);
     cx.spawn(async move |_, cx| {
-        let engine = cx
-            .background_spawn(async move {
-                Engine::new(
-                    EngineOptions { system_fonts: true },
-                    Arc::new(DiagramService::with_defaults()),
-                )
-            })
-            .await;
+        let engine = task.await;
         preview.update(cx, |preview, cx| preview.set_engine(engine, cx));
     })
     .detach();
+}
+
+fn export_target(app: &AppRoot, extension: &str, cx: &App) -> Option<(PathBuf, String, PathBuf)> {
+    let document = app.document.read(cx);
+    let workspace = document.workspace();
+    let active = workspace.active()?;
+    let dest = workspace
+        .root()
+        .join(&active.relative)
+        .with_extension(extension);
+    let base = workspace.root().to_path_buf();
+    Some((dest, document.text().to_string(), base))
+}
+
+fn export_notice(result: &Result<PathBuf, String>) -> String {
+    match result {
+        Ok(path) => format!(
+            "Exported {}",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        ),
+        Err(error) => error.clone(),
+    }
+}
+
+fn finish_export(
+    handle: AnyWindowHandle,
+    task: Task<Result<PathBuf, String>>,
+    cx: &mut Context<AppRoot>,
+) {
+    cx.spawn(async move |_, cx| {
+        let result = task.await;
+        cx.update(|cx| {
+            handle
+                .update(cx, |_, window, cx| {
+                    window.push_notification(export_notice(&result), cx);
+                })
+                .ok();
+        });
+    })
+    .detach();
+}
+
+fn workspace_stamp(workspace: &crate::workspace::Workspace) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    workspace.root().hash(&mut hasher);
+    for path in workspace.files() {
+        path.hash(&mut hasher);
+    }
+    for buffer in workspace.buffers() {
+        buffer.relative.hash(&mut hasher);
+        buffer.text.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn ranked_files(files: &[PathBuf]) -> Vec<PathBuf> {
+    let labels: Vec<String> = files
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    let ranked = crate::search::quick_open("", &labels);
+    let mut ordered: Vec<PathBuf> = ranked
+        .iter()
+        .filter_map(|label| {
+            files
+                .iter()
+                .find(|path| path.display().to_string() == *label)
+                .cloned()
+        })
+        .collect();
+    for path in files {
+        if !ordered.contains(path) {
+            ordered.push(path.clone());
+        }
+    }
+    ordered
 }
 
 const BUILTIN_PRESETS: &[&str] = &[

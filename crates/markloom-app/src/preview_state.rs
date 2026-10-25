@@ -99,6 +99,16 @@ impl PreviewState {
         self.compile_count
     }
 
+    /// Last compile that was applied. `None` until the first successful compile.
+    pub fn compiled(&self) -> Option<&Compiled> {
+        self.compiled.as_ref()
+    }
+
+    /// Engine handle, once fonts have loaded. Export uses it when the preview is stale.
+    pub fn engine_handle(&self) -> Option<Arc<Mutex<Engine>>> {
+        self.engine.clone()
+    }
+
     /// Pages in the last compile that was applied.
     pub fn page_count(&self) -> Option<usize> {
         self.compiled.as_ref().map(Compiled::page_count)

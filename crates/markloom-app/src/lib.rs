@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod document;
+pub mod jobs;
 pub mod preview_pipeline;
 pub mod preview_state;
 pub mod probe;
