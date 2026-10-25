@@ -1,0 +1,12 @@
+[package]
+name = "markloom-mermaid"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+markloom-style = { path = "../markloom-style" }
+mermaid-rs-renderer.workspace = true
+
+[dev-dependencies]
+usvg.workspace = true
