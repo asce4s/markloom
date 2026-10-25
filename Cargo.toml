@@ -5,6 +5,8 @@ members = [
     "crates/markloom-style",
     "crates/markloom-mermaid",
     "crates/markloom-typeset",
+    "crates/markloom-docx",
+    "crates/markloom-app",
 ]
 exclude = ["spikes/preview-latency", "spikes/mermaid-compare"]
 
@@ -30,3 +32,9 @@ mermaid-rs-renderer = { version = "=0.3.1", default-features = false }
 insta = "=1.49.0"
 usvg = "=0.45.1"
 png = "0.17"
+docx-rs = "=0.4.22"
+resvg = "=0.45.1"
+gpui-kit = { version = "=0.8.0", features = ["tree-sitter-markdown", "tree-sitter-markdown-inline"] }
+notify = "=8.2.1"
+trash = "=5.2.9"
+zip = "=2.6.1"
