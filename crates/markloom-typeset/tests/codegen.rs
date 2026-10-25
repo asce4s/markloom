@@ -165,6 +165,128 @@ fn placeholder_alt_cannot_inject_typst() {
     assert!(!stripped.contains("$x$"), "{stripped}");
 }
 
+fn source_with(
+    markdown: &str,
+    edit: impl FnOnce(&mut markloom_style::StyleSheet),
+) -> markloom_typeset::CodegenOutput {
+    let mut style = PresetRegistry::builtin()
+        .resolve("github", &[])
+        .expect("github");
+    edit(&mut style);
+    generate(
+        &parse(markdown),
+        &style,
+        Path::new("."),
+        &DiagramService::with_defaults(),
+    )
+}
+
+#[test]
+fn snapshot_preamble_orientation_landscape() {
+    insta::assert_snapshot!(
+        source_with("", |style| {
+            style.page.orientation = markloom_style::Orientation::Landscape;
+        })
+        .source
+    );
+}
+
+#[test]
+fn snapshot_preamble_toc_depth_2() {
+    insta::assert_snapshot!(
+        source_with("", |style| {
+            style.page.toc = true;
+            style.page.toc_depth = 2;
+        })
+        .source
+    );
+}
+
+#[test]
+fn snapshot_preamble_number_headings() {
+    insta::assert_snapshot!(
+        source_with("", |style| {
+            style.typography.number_headings = true;
+        })
+        .source
+    );
+}
+
+#[test]
+fn snapshot_preamble_break_before_h1() {
+    insta::assert_snapshot!(
+        source_with("", |style| {
+            style.page.break_before_h1 = true;
+        })
+        .source
+    );
+}
+
+#[test]
+fn snapshot_preamble_header_text() {
+    insta::assert_snapshot!(
+        source_with("", |style| {
+            style.table.header_text = Some(markloom_style::Color {
+                r: 0xff,
+                g: 0xff,
+                b: 0xff,
+                a: 255,
+            });
+        })
+        .source
+    );
+}
+
+#[test]
+fn snapshot_preamble_custom_typst() {
+    insta::assert_snapshot!(
+        source_with("", |style| {
+            style.custom.typst = "#set text(tracking: 1pt)".into();
+        })
+        .source
+    );
+}
+
+#[test]
+fn image_uses_images_style() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("markloom-img-{nanos}"));
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("pic.png"), b"not-a-real-png").expect("png");
+    let mut style = PresetRegistry::builtin()
+        .resolve("github", &[])
+        .expect("github");
+    style.images.max_width = 0.5;
+    style.images.align = markloom_style::HAlign::Right;
+    let output = generate(
+        &parse("![alt](pic.png)\n"),
+        &style,
+        &dir,
+        &DiagramService::with_defaults(),
+    );
+    assert!(
+        output.source.contains("#align(right, image("),
+        "{}",
+        output.source
+    );
+    assert!(output.source.contains("width: 50%"), "{}", output.source);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn custom_lines_cover_custom_block() {
+    let custom = "#set text(tracking: 1pt)";
+    let output = source_with("", |style| style.custom.typst = custom.into());
+    let range = output.custom_lines.expect("custom lines");
+    let lines: Vec<&str> = output.source.lines().collect();
+    let start = usize::try_from(range.start).expect("start") - 1;
+    let end = usize::try_from(range.end).expect("end") - 1;
+    assert_eq!(lines[start..end].join("\n"), custom);
+}
+
 #[test]
 fn list_bullet_cannot_inject_typst() {
     let mut style = PresetRegistry::builtin()

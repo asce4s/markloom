@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use markloom_core::parse;
 use markloom_mermaid::DiagramService;
@@ -54,6 +54,65 @@ fn pdf_starts_with_magic() {
         })
         .expect("pdf");
     assert!(bytes.starts_with(b"%PDF-"), "pdf magic missing");
+}
+
+#[test]
+fn landscape_page_is_wide() {
+    let mut style = github();
+    style.page.orientation = markloom_style::Orientation::Landscape;
+    let compiled = engine()
+        .compile(&parse("# Hello\n"), &style, Path::new("."))
+        .expect("landscape");
+    let (width, height) = compiled.page_size_pt(0);
+    assert!(width > height, "{width} x {height}");
+}
+
+#[test]
+fn custom_typst_error_is_prefixed() {
+    let mut style = github();
+    style.custom.typst = "#let x = ".into();
+    let failure = engine()
+        .compile(&parse("# Hello\n"), &style, Path::new("."))
+        .expect_err("broken custom typst");
+    let message = &failure.diagnostics[0].message;
+    assert!(message.starts_with("Custom Typst: "), "{message}");
+    assert_eq!(failure.diagnostics[0].md_line, None);
+}
+
+#[test]
+fn custom_typst_infinite_loop_is_an_error() {
+    let mut style = github();
+    style.custom.typst = "#while true {}".into();
+    let started = Instant::now();
+    let failure = engine()
+        .compile(&parse("Hi\n"), &style, Path::new("."))
+        .expect_err("loop must fail");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "elapsed {:?}",
+        started.elapsed()
+    );
+    let message = &failure.diagnostics[0].message;
+    assert!(message.starts_with("Custom Typst: "), "{message}");
+}
+
+#[test]
+fn diagram_count_includes_diagram_blocks() {
+    let compiled = compile("```mermaid\ngraph TD; A-->B\n```\n");
+    assert_eq!(compiled.diagram_count, 1);
+    let plain = compile("# Hello\n");
+    assert_eq!(plain.diagram_count, 0);
+}
+
+#[test]
+fn premultiplied_render_keeps_byte_length() {
+    let compiled = compile("# Hello\n");
+    let page = compiled.render_page_premultiplied(0, 1.0);
+    assert_eq!(
+        page.rgba.len(),
+        page.width as usize * page.height as usize * 4
+    );
+    assert!(page.width > page.height / 2);
 }
 
 #[test]

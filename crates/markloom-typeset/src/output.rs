@@ -64,6 +64,23 @@ pub(crate) fn render_page(
     index: usize,
     pixels_per_pt: f32,
 ) -> PageBitmap {
+    render_pixmap(document, index, pixels_per_pt, true)
+}
+
+pub(crate) fn render_page_premultiplied(
+    document: &PagedDocument,
+    index: usize,
+    pixels_per_pt: f32,
+) -> PageBitmap {
+    render_pixmap(document, index, pixels_per_pt, false)
+}
+
+fn render_pixmap(
+    document: &PagedDocument,
+    index: usize,
+    pixels_per_pt: f32,
+    straight_alpha: bool,
+) -> PageBitmap {
     let Some(page) = document.pages().get(index) else {
         return PageBitmap {
             width: 0,
@@ -76,10 +93,15 @@ pub(crate) fn render_page(
         render_bleed: false,
     };
     let pixmap = render(page, &options);
+    let rgba = if straight_alpha {
+        unpremultiply(pixmap.data())
+    } else {
+        pixmap.data().to_vec()
+    };
     PageBitmap {
         width: pixmap.width(),
         height: pixmap.height(),
-        rgba: unpremultiply(pixmap.data()),
+        rgba,
     }
 }
 

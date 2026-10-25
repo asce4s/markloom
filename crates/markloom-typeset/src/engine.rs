@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use markloom_core::Doc;
+use markloom_core::{Block, Doc};
 use markloom_mermaid::DiagramService;
 use markloom_style::StyleSheet;
 use typst_layout::PagedDocument;
@@ -63,6 +63,7 @@ pub struct Compiled {
     pub document: Arc<PagedDocument>,
     pub source_map: SourceMap,
     pub warnings: Vec<Diag>,
+    pub diagram_count: usize,
 }
 
 impl Compiled {
@@ -80,6 +81,11 @@ impl Compiled {
 
     pub fn render_page(&self, index: usize, pixels_per_pt: f32) -> PageBitmap {
         output::render_page(&self.document, index, pixels_per_pt)
+    }
+
+    /// Premultiplied RGBA from tiny-skia, with no unpremultiply step.
+    pub fn render_page_premultiplied(&self, index: usize, pixels_per_pt: f32) -> PageBitmap {
+        output::render_page_premultiplied(&self.document, index, pixels_per_pt)
     }
 
     pub fn pdf_bytes(&self, meta: &PdfMeta) -> Result<Vec<u8>, ExportError> {
@@ -130,6 +136,7 @@ impl Engine {
                     document: Arc::new(document),
                     source_map,
                     warnings: warned.warnings.iter().map(diagnostics).collect(),
+                    diagram_count: count_diagrams(doc),
                 })
             }
             Err(errors) => Err(CompileFailure {
@@ -148,12 +155,48 @@ fn diag_from(
         typst::diag::Severity::Error => Severity::Error,
         typst::diag::Severity::Warning => Severity::Warning,
     };
-    let md_line = world
-        .typst_line(diagnostic.span)
-        .and_then(|line| md_line_for_typst_line(generated, line));
+    let typst_line = world.typst_line(diagnostic.span);
+    let in_custom = typst_line.is_some_and(|line| {
+        generated
+            .custom_lines
+            .as_ref()
+            .is_some_and(|range| range.contains(&line))
+    });
+    if in_custom {
+        return Diag {
+            message: format!("Custom Typst: {}", diagnostic.message),
+            md_line: None,
+            severity,
+        };
+    }
+    let md_line = typst_line.and_then(|line| md_line_for_typst_line(generated, line));
     Diag {
         message: diagnostic.message.to_string(),
         md_line,
         severity,
     }
+}
+
+fn count_diagrams(doc: &Doc) -> usize {
+    fn walk(blocks: &[Block]) -> usize {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Diagram { .. } => 1,
+                Block::Quote { blocks, .. } => walk(blocks),
+                Block::List { items, .. } => items.iter().map(|item| walk(&item.blocks)).sum(),
+                Block::Heading { .. }
+                | Block::Paragraph { .. }
+                | Block::Code { .. }
+                | Block::Table { .. }
+                | Block::Rule { .. } => 0,
+            })
+            .sum()
+    }
+    walk(&doc.blocks)
+        + doc
+            .footnotes
+            .values()
+            .map(|blocks| walk(blocks))
+            .sum::<usize>()
 }

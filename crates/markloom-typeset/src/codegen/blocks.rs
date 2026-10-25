@@ -21,6 +21,7 @@ pub(crate) struct Emitter<'a> {
     source: String,
     line: u32,
     image_index: usize,
+    custom_lines: Option<std::ops::Range<u32>>,
 }
 
 impl<'a> Emitter<'a> {
@@ -45,6 +46,7 @@ impl<'a> Emitter<'a> {
             source: preamble,
             line,
             image_index: 0,
+            custom_lines: None,
         }
     }
 
@@ -54,7 +56,31 @@ impl<'a> Emitter<'a> {
             blocks: self.blocks,
             line_to_block: self.line_to_block,
             assets: self.assets,
+            custom_lines: self.custom_lines,
         }
+    }
+
+    pub(crate) fn emit_after_preamble(&mut self) {
+        self.emit_custom();
+        if self.style.page.toc {
+            self.write(&format!("#outline(depth: {})\n", self.style.page.toc_depth));
+        }
+    }
+
+    fn emit_custom(&mut self) {
+        let text = self.style.custom.typst.as_str();
+        if text.is_empty() {
+            return;
+        }
+        self.write("// custom:start\n");
+        let start = self.line;
+        self.write(text);
+        if !text.ends_with('\n') {
+            self.write("\n");
+        }
+        let end = self.line;
+        self.custom_lines = Some(start..end);
+        self.write("// custom:end\n");
     }
 
     pub(crate) fn emit_document(&mut self) {
@@ -249,8 +275,10 @@ impl<'a> Emitter<'a> {
                 .and_then(|ext| ext.to_str())
                 .unwrap_or("bin");
             let vpath = format!("/i/{index}.{ext}");
+            let align = align_h(self.style.images.align);
+            let width = trim_pct(self.style.images.max_width * 100.0);
             self.write(&format!(
-                "#image({}, alt: {})",
+                "#align({align}, image({}, alt: {}, width: {width}%))",
                 str_lit(&vpath),
                 str_lit(alt)
             ));
@@ -382,6 +410,7 @@ pub(crate) fn emit(
     preamble: String,
 ) -> CodegenOutput {
     let mut emitter = Emitter::new(doc, style, base_dir, diagrams, preamble);
+    emitter.emit_after_preamble();
     emitter.emit_document();
     emitter.finish()
 }

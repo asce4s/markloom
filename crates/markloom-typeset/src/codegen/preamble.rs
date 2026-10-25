@@ -1,6 +1,8 @@
 //! One `#set` or `#show` rule per style field.
 
-use markloom_style::{Color, Length, PageNumbers, PaperSize, StyleSheet, TableBorders, Weight};
+use markloom_style::{
+    Color, Length, Orientation, PageNumbers, PaperSize, StyleSheet, TableBorders, Weight,
+};
 
 use super::escape::{fmt_number, str_lit};
 
@@ -27,6 +29,9 @@ pub(crate) fn render(style: &StyleSheet) -> String {
         style.colors.heading.to_typst(),
         weight_name(style.typography.heading_weight),
     ));
+    if style.typography.number_headings {
+        out.push_str("#set heading(numbering: \"1.1\")\n");
+    }
     for level in 1..=6 {
         let size = scaled(
             style.typography.base_size,
@@ -35,6 +40,9 @@ pub(crate) fn render(style: &StyleSheet) -> String {
         out.push_str(&format!(
             "#show heading.where(level: {level}): set text(size: {size})\n"
         ));
+    }
+    if style.page.break_before_h1 {
+        out.push_str("#show heading.where(level: 1): it => pagebreak(weak: true) + it\n");
     }
     out.push_str(&format!(
         "#show link: set text(fill: {})\n",
@@ -60,6 +68,12 @@ pub(crate) fn render(style: &StyleSheet) -> String {
     ));
     out.push_str(&table_rule(style));
     out.push('\n');
+    if let Some(color) = style.table.header_text {
+        out.push_str(&format!(
+            "#show table.cell.where(y: 0): set text(fill: {})\n",
+            color.to_typst()
+        ));
+    }
     let quote_style = if style.blockquote.italic {
         "\"italic\""
     } else {
@@ -80,9 +94,6 @@ pub(crate) fn render(style: &StyleSheet) -> String {
         "#set enum(indent: {})\n",
         style.lists.indent.to_typst()
     ));
-    if style.page.toc {
-        out.push_str("#outline()\n");
-    }
     out
 }
 
@@ -112,6 +123,9 @@ fn page_rule(style: &StyleSheet) -> String {
                 parts.push("number-align: right".into());
             }
         }
+    }
+    if style.page.orientation == Orientation::Landscape {
+        parts.push("flipped: true".into());
     }
     if !style.page.header.is_empty() {
         parts.push(format!(

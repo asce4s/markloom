@@ -34,6 +34,8 @@ pub struct CodegenOutput {
     pub blocks: Vec<SourceRange>,
     pub line_to_block: Vec<(u32, usize)>,
     pub assets: Assets,
+    /// 1-based Typst lines of the custom block, exclusive of the marker lines.
+    pub custom_lines: Option<std::ops::Range<u32>>,
 }
 
 /// Generate Typst. Markdown text is emitted only as string literals.
