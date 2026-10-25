@@ -1,0 +1,28 @@
+[colors]
+text = "#000000"
+heading = "#000000"
+link = "#000000"
+muted = "#000000"
+page_bg = "#ffffff"
+
+[code]
+background = "#ffffff"
+border = "none"
+
+[table]
+borders = "Grid"
+border_color = "#000000"
+header_bg = "none"
+zebra = "none"
+
+[blockquote]
+bar_color = "#000000"
+text_color = "#000000"
+
+[diagram]
+theme = "Neutral"
+background = "none"
+border = "none"
+
+[page]
+page_numbers = "BottomRight"

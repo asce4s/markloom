@@ -45,12 +45,16 @@ impl StyleSheet {
 pub enum StyleError {
     Range(String),
     Message(String),
+    Cycle(String),
+    Unknown(String),
 }
 
 impl std::fmt::Display for StyleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StyleError::Range(message) | StyleError::Message(message) => f.write_str(message),
+            StyleError::Cycle(name) => write!(f, "preset cycle at {name}"),
+            StyleError::Unknown(name) => write!(f, "unknown preset {name}"),
         }
     }
 }

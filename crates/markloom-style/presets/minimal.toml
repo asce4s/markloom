@@ -1,0 +1,11 @@
+[table]
+borders = "HeaderOnly"
+header_bg = "none"
+zebra = "none"
+
+[code]
+background = "#ffffff"
+border = "#d1d9e0"
+
+[blockquote]
+italic = true

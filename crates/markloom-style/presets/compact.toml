@@ -1,0 +1,14 @@
+[typography]
+base_size = "9.5pt"
+line_height = 1.3
+paragraph_spacing = "4pt"
+heading_scale = [1.6, 1.35, 1.15, 1.0, 0.9, 0.85]
+
+[page]
+margin = "1.2cm"
+
+[table]
+cell_padding = "3pt"
+
+[code]
+inset = "6pt"

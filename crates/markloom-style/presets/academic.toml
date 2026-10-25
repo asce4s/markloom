@@ -1,0 +1,21 @@
+[typography]
+body_font = ["Libertinus Serif", "New Computer Modern"]
+heading_font = ["Libertinus Serif", "New Computer Modern"]
+base_size = "11pt"
+justify = true
+heading_weight = "Bold"
+
+[page]
+margin = "2.5cm"
+toc = true
+
+[table]
+borders = "Horizontal"
+header_bg = "none"
+zebra = "none"
+
+[colors]
+link = "#1f2328"
+
+[diagram]
+theme = "Neutral"
