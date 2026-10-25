@@ -1,0 +1,54 @@
+---
+source: crates/markloom-typeset/tests/codegen.rs
+expression: "source_for(markdown, \"github\").source"
+---
+#set page(paper: "a4", margin: (top: 56.6929pt, right: 56.6929pt, bottom: 56.6929pt, left: 56.6929pt), fill: rgb("#ffffffff"), numbering: "1", number-align: center)
+#set text(font: ("Inter", "Liberation Sans", "DejaVu Sans"), size: 11pt, fill: rgb("#1f2328ff"))
+#set par(leading: 0.6em, spacing: 10pt, justify: false)
+#show heading: set text(font: ("Inter", "Liberation Sans", "DejaVu Sans"), fill: rgb("#1f2328ff"), weight: "semibold")
+#show heading.where(level: 1): set text(size: 22pt)
+#show heading.where(level: 2): set text(size: 16.5pt)
+#show heading.where(level: 3): set text(size: 13.75pt)
+#show heading.where(level: 4): set text(size: 11pt)
+#show heading.where(level: 5): set text(size: 9.625pt)
+#show heading.where(level: 6): set text(size: 9.35pt)
+#show link: set text(fill: rgb("#0969daff"))
+#show raw: set text(font: ("JetBrains Mono", "DejaVu Sans Mono"), size: 0.85em)
+#show raw.where(block: true): it => block(fill: rgb("#f6f8faff"), radius: 6pt, inset: 10pt, stroke: none, width: 100%, it)
+#set table(stroke: 0.75pt + rgb("#d1d9e0ff"), inset: 6pt, fill: (x, y) => if y == 0 { rgb("#f6f8faff") } else if calc.even(y) { rgb("#f6f8faff") } else { none })
+#show quote.where(block: true): it => block(stroke: (left: 3pt + rgb("#d1d9e0ff")), inset: (left: 0.6em, y: 2pt), text(fill: rgb("#59636eff"), style: "normal", it.body))
+#set list(indent: 1.2em, marker: [•])
+#set enum(indent: 1.2em)
+#metadata(0) <ml-b>
+#heading(level: 1)[#"Title"]
+
+#metadata(1) <ml-b>
+#"A paragraph with "#strong[#"bold"]#", "#link("https://example.com")[#"a link"]#", and "#raw("code")#"."
+
+#metadata(2) <ml-b>
+#quote(block: true)[#"A quote"
+#list([#"nested"])]
+
+#metadata(3) <ml-b>
+#list([#"☐ " #"todo"], [#"☑ " #"done"])
+
+#metadata(4) <ml-b>
+#enum(start: 3, [#"third"])
+
+#metadata(5) <ml-b>
+#table(columns: 3, align: (auto, center, right), table.header([#"a"], [#"b"], [#"c"]), [#"1"], [#"2"], [#"3"])
+
+#metadata(6) <ml-b>
+#line(length: 100%, stroke: rgb("#d1d9e0ff"))
+
+#metadata(7) <ml-b>
+#raw(block: true, lang: "rust", "fn main() {}\n")
+
+#metadata(8) <ml-b>
+#align(center, block(image("/d/c07d8561ec3f2743.svg", width: 100%)))
+
+#metadata(9) <ml-b>
+#"See"#footnote[#"note"]
+
+#metadata(10) <ml-b>
+#box(stroke: rgb("#59636eff"), inset: 4pt)[#text(fill: rgb("#59636eff"))[Image: alt]]

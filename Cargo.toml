@@ -4,6 +4,7 @@ members = [
     "crates/markloom-core",
     "crates/markloom-style",
     "crates/markloom-mermaid",
+    "crates/markloom-typeset",
 ]
 exclude = ["spikes/preview-latency", "spikes/mermaid-compare"]
 

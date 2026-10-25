@@ -1,0 +1,21 @@
+---
+source: crates/markloom-typeset/tests/codegen.rs
+expression: "preamble(\"print-friendly\")"
+---
+#set page(paper: "a4", margin: (top: 56.6929pt, right: 56.6929pt, bottom: 56.6929pt, left: 56.6929pt), fill: rgb("#ffffffff"), numbering: "1", number-align: right)
+#set text(font: ("Inter", "Liberation Sans", "DejaVu Sans"), size: 11pt, fill: rgb("#000000ff"))
+#set par(leading: 0.6em, spacing: 10pt, justify: false)
+#show heading: set text(font: ("Inter", "Liberation Sans", "DejaVu Sans"), fill: rgb("#000000ff"), weight: "semibold")
+#show heading.where(level: 1): set text(size: 22pt)
+#show heading.where(level: 2): set text(size: 16.5pt)
+#show heading.where(level: 3): set text(size: 13.75pt)
+#show heading.where(level: 4): set text(size: 11pt)
+#show heading.where(level: 5): set text(size: 9.625pt)
+#show heading.where(level: 6): set text(size: 9.35pt)
+#show link: set text(fill: rgb("#000000ff"))
+#show raw: set text(font: ("JetBrains Mono", "DejaVu Sans Mono"), size: 0.85em)
+#show raw.where(block: true): it => block(fill: rgb("#ffffffff"), radius: 6pt, inset: 10pt, stroke: none, width: 100%, it)
+#set table(stroke: 0.75pt + rgb("#000000ff"), inset: 6pt, fill: (x, y) => if y == 0 { none } else if calc.even(y) { none } else { none })
+#show quote.where(block: true): it => block(stroke: (left: 3pt + rgb("#000000ff")), inset: (left: 0.6em, y: 2pt), text(fill: rgb("#000000ff"), style: "normal", it.body))
+#set list(indent: 1.2em, marker: [•])
+#set enum(indent: 1.2em)

@@ -1,0 +1,13 @@
+[package]
+name = "markloom-typeset"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+markloom-core = { path = "../markloom-core" }
+markloom-style = { path = "../markloom-style" }
+markloom-mermaid = { path = "../markloom-mermaid" }
+
+[dev-dependencies]
+insta.workspace = true
