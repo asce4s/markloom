@@ -1,1 +1,4 @@
-//! Markloom desktop app. Headless modules live here; the window is the binary.
+//! Headless workspace, preview policy, and style session for the desktop app.
+
+pub mod settings;
+pub mod workspace;
