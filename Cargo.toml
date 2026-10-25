@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/markloom-core"]
+members = ["crates/markloom-core", "crates/markloom-style"]
 exclude = ["spikes/preview-latency", "spikes/mermaid-compare"]
 
 [workspace.package]
