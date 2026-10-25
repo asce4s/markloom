@@ -17,6 +17,6 @@ expression: "preamble(\"academic\")"
 #show raw.where(block: true): it => block(fill: rgb("#f6f8faff"), radius: 6pt, inset: 10pt, stroke: none, width: 100%, it)
 #set table(stroke: (x, y) => (top: if y == 0 { 0.75pt + rgb("#d1d9e0ff") } else { none }, bottom: 0.75pt + rgb("#d1d9e0ff"), left: none, right: none), inset: 6pt, fill: (x, y) => if y == 0 { none } else if calc.even(y) { none } else { none })
 #show quote.where(block: true): it => block(stroke: (left: 3pt + rgb("#d1d9e0ff")), inset: (left: 0.6em, y: 2pt), text(fill: rgb("#59636eff"), style: "normal", it.body))
-#set list(indent: 1.2em, marker: [•])
+#set list(indent: 1.2em, marker: [#"•"])
 #set enum(indent: 1.2em)
 #outline()

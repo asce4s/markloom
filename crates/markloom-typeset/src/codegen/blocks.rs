@@ -260,8 +260,9 @@ impl<'a> Emitter<'a> {
         let label = if alt.is_empty() { url } else { alt };
         let muted = self.style.colors.muted.to_typst();
         self.write(&format!(
-            "#box(stroke: {muted}, inset: 4pt)[#text(fill: {muted})[Image: {}]]",
-            content_escape(label)
+            "#box(stroke: {muted}, inset: 4pt)[#text(fill: {muted})[#{}]]",
+            str_lit(&format!("Image: {label}")),
+            muted = muted,
         ));
     }
 
@@ -354,13 +355,6 @@ fn align_h(align: HAlign) -> &'static str {
         HAlign::Center => "center",
         HAlign::Right => "right",
     }
-}
-
-fn content_escape(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('[', "\\[")
-        .replace(']', "\\]")
-        .replace('#', "\\#")
 }
 
 fn diagram_message(error: &DiagramError) -> String {

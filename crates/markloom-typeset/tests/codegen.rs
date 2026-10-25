@@ -148,3 +148,42 @@ fn missing_image_is_placeholder() {
     assert!(output.source.contains("Image: alt"), "{}", output.source);
     assert!(output.assets.images.is_empty());
 }
+
+#[test]
+fn placeholder_alt_cannot_inject_typst() {
+    let alt = "#set page(width: 1pt) $x$ @ref";
+    let markdown = format!("![{alt}](nope.png)\n");
+    let output = source_for(&markdown, "github");
+    let literal = str_lit(&format!("Image: {alt}"));
+    assert!(
+        output.source.contains(&literal),
+        "alt was not a string literal:\n{}",
+        output.source
+    );
+    let stripped = output.source.replacen(&literal, "", 1);
+    assert_eq!(stripped.matches("#set page(").count(), 1, "{stripped}");
+    assert!(!stripped.contains("$x$"), "{stripped}");
+}
+
+#[test]
+fn list_bullet_cannot_inject_typst() {
+    let mut style = PresetRegistry::builtin()
+        .resolve("github", &[])
+        .expect("github");
+    style.lists.bullet = "#set page(width: 1pt) $x$".into();
+    let output = generate(
+        &parse("- item\n"),
+        &style,
+        Path::new("."),
+        &DiagramService::with_defaults(),
+    );
+    let literal = str_lit(&style.lists.bullet);
+    assert!(
+        output.source.contains(&literal),
+        "bullet was not a string literal:\n{}",
+        output.source
+    );
+    let stripped = output.source.replacen(&literal, "", 1);
+    assert_eq!(stripped.matches("#set page(").count(), 1, "{stripped}");
+    assert!(!stripped.contains("$x$"), "{stripped}");
+}

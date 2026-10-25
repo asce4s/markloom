@@ -17,7 +17,7 @@ expression: "source_for(markdown, \"github\").source"
 #show raw.where(block: true): it => block(fill: rgb("#f6f8faff"), radius: 6pt, inset: 10pt, stroke: none, width: 100%, it)
 #set table(stroke: 0.75pt + rgb("#d1d9e0ff"), inset: 6pt, fill: (x, y) => if y == 0 { rgb("#f6f8faff") } else if calc.even(y) { rgb("#f6f8faff") } else { none })
 #show quote.where(block: true): it => block(stroke: (left: 3pt + rgb("#d1d9e0ff")), inset: (left: 0.6em, y: 2pt), text(fill: rgb("#59636eff"), style: "normal", it.body))
-#set list(indent: 1.2em, marker: [•])
+#set list(indent: 1.2em, marker: [#"•"])
 #set enum(indent: 1.2em)
 #metadata(0) <ml-b>
 #heading(level: 1)[#"Title"]
@@ -51,4 +51,4 @@ expression: "source_for(markdown, \"github\").source"
 #"See"#footnote[#"note"]
 
 #metadata(10) <ml-b>
-#box(stroke: rgb("#59636eff"), inset: 4pt)[#text(fill: rgb("#59636eff"))[Image: alt]]
+#box(stroke: rgb("#59636eff"), inset: 4pt)[#text(fill: rgb("#59636eff"))[#"Image: alt"]]

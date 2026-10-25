@@ -17,5 +17,5 @@ expression: "preamble(\"minimal\")"
 #show raw.where(block: true): it => block(fill: rgb("#ffffffff"), radius: 6pt, inset: 10pt, stroke: rgb("#d1d9e0ff"), width: 100%, it)
 #set table(stroke: (x, y) => if y == 0 { (bottom: 0.75pt + rgb("#d1d9e0ff")) } else { none }, inset: 6pt, fill: (x, y) => if y == 0 { none } else if calc.even(y) { none } else { none })
 #show quote.where(block: true): it => block(stroke: (left: 3pt + rgb("#d1d9e0ff")), inset: (left: 0.6em, y: 2pt), text(fill: rgb("#59636eff"), style: "italic", it.body))
-#set list(indent: 1.2em, marker: [•])
+#set list(indent: 1.2em, marker: [#"•"])
 #set enum(indent: 1.2em)

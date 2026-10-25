@@ -156,6 +156,19 @@ Still a paragraph.
 }
 
 #[test]
+fn hostile_image_alt_compiles() {
+    let markdown = "![#set page(width: 1pt) $x$ @ref](missing.png)\n";
+    let compiled = compile(markdown);
+    assert!(compiled.page_count() >= 1);
+    assert!(
+        compiled
+            .warnings
+            .iter()
+            .all(|diag| diag.severity != Severity::Error)
+    );
+}
+
+#[test]
 fn bad_images_become_placeholders() {
     let dir = std::env::temp_dir().join(format!("markloom-engine-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");

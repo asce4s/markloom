@@ -17,5 +17,5 @@ expression: "preamble(\"print-friendly\")"
 #show raw.where(block: true): it => block(fill: rgb("#ffffffff"), radius: 6pt, inset: 10pt, stroke: none, width: 100%, it)
 #set table(stroke: 0.75pt + rgb("#000000ff"), inset: 6pt, fill: (x, y) => if y == 0 { none } else if calc.even(y) { none } else { none })
 #show quote.where(block: true): it => block(stroke: (left: 3pt + rgb("#000000ff")), inset: (left: 0.6em, y: 2pt), text(fill: rgb("#000000ff"), style: "normal", it.body))
-#set list(indent: 1.2em, marker: [•])
+#set list(indent: 1.2em, marker: [#"•"])
 #set enum(indent: 1.2em)

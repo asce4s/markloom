@@ -72,9 +72,9 @@ pub(crate) fn render(style: &StyleSheet) -> String {
         style.blockquote.text_color.to_typst(),
     ));
     out.push_str(&format!(
-        "#set list(indent: {}, marker: [{}])\n",
+        "#set list(indent: {}, marker: [#{bullet}])\n",
         style.lists.indent.to_typst(),
-        style.lists.bullet,
+        bullet = str_lit(&style.lists.bullet),
     ));
     out.push_str(&format!(
         "#set enum(indent: {})\n",
