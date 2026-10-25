@@ -1,0 +1,29 @@
+[package]
+name = "preview-latency"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+typst = "=0.15.1"
+typst-layout = "=0.15.1"
+typst-kit = { version = "=0.15.1", default-features = false, features = ["embedded-fonts"] }
+typst-render = "=0.15.1"
+gpui-kit = { version = "=0.8.0", optional = true }
+image = { version = "0.25", optional = true }
+
+[features]
+default = ["gui"]
+gui = ["dep:gpui-kit", "dep:image"]
+
+[[bin]]
+name = "preview-latency"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[[bin]]
+name = "measure"
+path = "src/measure.rs"
+required-features = []
