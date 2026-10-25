@@ -10,6 +10,7 @@ use typst_layout::PagedDocument;
 
 use crate::codegen::generate;
 use crate::output::{self, ExportError, PageBitmap, PdfMeta};
+use crate::source_map::{self, SourceMap, md_line_for_typst_line};
 use crate::world::MarkloomWorld;
 
 /// Whether the world also loads fonts installed on the machine.
@@ -55,12 +56,6 @@ impl std::fmt::Display for CompileFailure {
 }
 
 impl std::error::Error for CompileFailure {}
-
-/// Block positions. Task 8 fills this from the introspector.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SourceMap {
-    _stub: (),
-}
 
 /// A successful compile.
 #[derive(Debug, Clone)]
@@ -125,27 +120,40 @@ impl Engine {
             .replace_document(&generated.source, &generated.assets);
         let warned = typst::compile::<PagedDocument>(&self.world);
         typst::comemo::evict(30);
+        let diagnostics = |diagnostic: &typst::diag::SourceDiagnostic| {
+            diag_from(diagnostic, &self.world, &generated)
+        };
         match warned.output {
-            Ok(document) => Ok(Compiled {
-                document: Arc::new(document),
-                source_map: SourceMap::default(),
-                warnings: warned.warnings.iter().map(diag_from).collect(),
-            }),
+            Ok(document) => {
+                let source_map = source_map::from_document(&document, &generated.blocks);
+                Ok(Compiled {
+                    document: Arc::new(document),
+                    source_map,
+                    warnings: warned.warnings.iter().map(diagnostics).collect(),
+                })
+            }
             Err(errors) => Err(CompileFailure {
-                diagnostics: errors.iter().map(diag_from).collect(),
+                diagnostics: errors.iter().map(diagnostics).collect(),
             }),
         }
     }
 }
 
-fn diag_from(diagnostic: &typst::diag::SourceDiagnostic) -> Diag {
+fn diag_from(
+    diagnostic: &typst::diag::SourceDiagnostic,
+    world: &MarkloomWorld,
+    generated: &crate::codegen::CodegenOutput,
+) -> Diag {
     let severity = match diagnostic.severity {
         typst::diag::Severity::Error => Severity::Error,
         typst::diag::Severity::Warning => Severity::Warning,
     };
+    let md_line = world
+        .typst_line(diagnostic.span)
+        .and_then(|line| md_line_for_typst_line(generated, line));
     Diag {
         message: diagnostic.message.to_string(),
-        md_line: None,
+        md_line,
         severity,
     }
 }

@@ -8,10 +8,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use typst::LibraryExt;
+use typst::WorldExt;
 use typst::diag::{FileError, FileResult};
 use typst::ecow::EcoString;
 use typst::foundations::{Bytes, Datetime, Duration};
-use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
+use typst::syntax::{DiagSpan, FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, World};
@@ -58,6 +59,15 @@ impl MarkloomWorld {
         names.sort();
         names.dedup();
         names
+    }
+
+    /// 1-based line in the current main source.
+    pub(crate) fn typst_line(&self, span: DiagSpan) -> Option<u32> {
+        let range = self.range(span)?;
+        let zero_based = self.source.lines().byte_to_line(range.start)?;
+        u32::try_from(zero_based)
+            .ok()
+            .map(|line| line.saturating_add(1))
     }
 
     pub(crate) fn replace_document(&mut self, source: &str, assets: &Assets) {

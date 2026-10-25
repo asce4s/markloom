@@ -122,7 +122,7 @@ fn export_diagnostics(
     ExportError::new(message)
 }
 
-fn abs_pt(length: Abs) -> f32 {
+pub(crate) fn abs_pt(length: Abs) -> f32 {
     let points = length.to_pt();
     if points.is_finite() {
         // Page sizes are a few hundred points. Truncation to f32 loses nothing visible.
