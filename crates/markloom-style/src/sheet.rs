@@ -17,6 +17,8 @@ pub struct StyleSheet {
     pub blockquote: QuoteStyle,
     pub lists: ListStyle,
     pub diagram: DiagramStyle,
+    pub images: ImageStyle,
+    pub custom: CustomStyle,
 }
 
 impl StyleSheet {
@@ -32,6 +34,12 @@ impl StyleSheet {
         }
         if !(0.25..=4.0).contains(&self.diagram.scale) {
             return Err(StyleError::Range("diagram.scale must be 0.25–4.0".into()));
+        }
+        if !(1..=6).contains(&self.page.toc_depth) {
+            return Err(StyleError::Range("toc_depth must be 1–6".into()));
+        }
+        if !(0.1..=1.0).contains(&self.images.max_width) {
+            return Err(StyleError::Range("images.max_width must be 0.1–1.0".into()));
         }
         match self.typography.base_size {
             Length::Pt(points) if (6.0..=32.0).contains(&points) => Ok(()),
@@ -62,6 +70,14 @@ impl std::fmt::Display for StyleError {
 impl std::error::Error for StyleError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Orientation {
+    #[default]
+    Portrait,
+    Landscape,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PaperSize {
     #[default]
     A4,
@@ -78,16 +94,40 @@ pub enum PageNumbers {
     BottomRight,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PageStyle {
     pub size: PaperSize,
+    pub orientation: Orientation,
     #[serde(default, deserialize_with = "deserialize_margin")]
     pub margin: Margins,
     pub header: String,
     pub footer: String,
     pub page_numbers: PageNumbers,
     pub toc: bool,
+    #[serde(default = "default_toc_depth")]
+    pub toc_depth: u8,
+    pub break_before_h1: bool,
+}
+
+impl Default for PageStyle {
+    fn default() -> Self {
+        Self {
+            size: PaperSize::A4,
+            orientation: Orientation::Portrait,
+            margin: Margins::default(),
+            header: String::new(),
+            footer: String::new(),
+            page_numbers: PageNumbers::BottomCenter,
+            toc: false,
+            toc_depth: default_toc_depth(),
+            break_before_h1: false,
+        }
+    }
+}
+
+fn default_toc_depth() -> u8 {
+    3
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -180,6 +220,7 @@ pub struct Typography {
     pub heading_scale: [f32; 6],
     pub heading_weight: Weight,
     pub justify: bool,
+    pub number_headings: bool,
 }
 
 impl Default for Typography {
@@ -194,6 +235,7 @@ impl Default for Typography {
             heading_scale: default_heading_scale(),
             heading_weight: Weight::Semibold,
             justify: false,
+            number_headings: false,
         }
     }
 }
@@ -344,6 +386,8 @@ pub struct TableStyle {
         deserialize_with = "deserialize_optional_color"
     )]
     pub header_bg: Option<Color>,
+    #[serde(default, deserialize_with = "deserialize_optional_color")]
+    pub header_text: Option<Color>,
     pub header_bold: bool,
     #[serde(
         default = "default_header_bg",
@@ -364,6 +408,7 @@ impl Default for TableStyle {
             border_color: default_border(),
             border_width: default_border_width(),
             header_bg: default_header_bg(),
+            header_text: None,
             header_bold: true,
             zebra: default_header_bg(),
             cell_padding: default_cell_padding(),
@@ -489,4 +534,31 @@ impl Default for DiagramStyle {
 
 fn default_scale() -> f32 {
     1.0
+}
+
+fn default_image_max_width() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ImageStyle {
+    #[serde(default = "default_image_max_width")]
+    pub max_width: f32,
+    pub align: HAlign,
+}
+
+impl Default for ImageStyle {
+    fn default() -> Self {
+        Self {
+            max_width: default_image_max_width(),
+            align: HAlign::Center,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct CustomStyle {
+    pub typst: String,
 }

@@ -8,8 +8,8 @@ mod values;
 pub use merge::deep_merge;
 pub use registry::{PresetLoadError, PresetRegistry};
 pub use sheet::{
-    CodeStyle, Colors, DiagramStyle, HAlign, ListStyle, Margins, MermaidTheme, PageNumbers,
-    PageStyle, PaperSize, QuoteStyle, StyleError, StyleSheet, TableBorders, TableStyle, Typography,
-    Weight,
+    CodeStyle, Colors, CustomStyle, DiagramStyle, HAlign, ImageStyle, ListStyle, Margins,
+    MermaidTheme, Orientation, PageNumbers, PageStyle, PaperSize, QuoteStyle, StyleError,
+    StyleSheet, TableBorders, TableStyle, Typography, Weight,
 };
 pub use values::{Color, Length};

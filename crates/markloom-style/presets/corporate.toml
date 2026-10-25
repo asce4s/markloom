@@ -1,0 +1,13 @@
+[page]
+margin = { top = "20mm", right = "18mm", bottom = "20mm", left = "18mm" }
+
+[table]
+borders = "Horizontal"
+header_bg = "#1d4ed8"
+header_text = "#ffffff"
+header_bold = true
+zebra = "#f8fafc"
+
+[colors]
+heading = "#0f172a"
+link = "#1d4ed8"

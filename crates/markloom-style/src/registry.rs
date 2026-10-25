@@ -16,6 +16,7 @@ const BUILTINS: &[(&str, &str)] = &[
         "print-friendly",
         include_str!("../presets/print-friendly.toml"),
     ),
+    ("corporate", include_str!("../presets/corporate.toml")),
 ];
 
 /// A user preset file that was skipped.
@@ -40,7 +41,7 @@ pub struct PresetRegistry {
 }
 
 impl PresetRegistry {
-    /// The five built-in presets, in display order.
+    /// The six built-in presets, in display order.
     pub fn builtin() -> Self {
         Self {
             user: BTreeMap::new(),

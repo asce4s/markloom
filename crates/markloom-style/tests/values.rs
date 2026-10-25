@@ -96,3 +96,44 @@ fn validate_ranges() {
     sheet.typography.line_height = 5.0;
     assert!(sheet.validate().is_err());
 }
+
+#[test]
+fn new_field_defaults() {
+    let sheet = StyleSheet::default();
+    assert_eq!(
+        sheet.page.orientation,
+        markloom_style::Orientation::Portrait
+    );
+    assert_eq!(sheet.page.toc_depth, 3);
+    assert!(!sheet.page.break_before_h1);
+    assert!(!sheet.typography.number_headings);
+    assert_eq!(sheet.table.header_text, None);
+    assert_eq!(sheet.images.max_width, 1.0);
+    assert_eq!(sheet.images.align, markloom_style::HAlign::Center);
+    assert_eq!(sheet.custom.typst, "");
+}
+
+#[test]
+fn orientation_parses() {
+    let sheet: StyleSheet =
+        toml::from_str("[page]\norientation = \"landscape\"\n").expect("orientation");
+    assert_eq!(
+        sheet.page.orientation,
+        markloom_style::Orientation::Landscape
+    );
+}
+
+#[test]
+fn toc_depth_range() {
+    for depth in [0, 7] {
+        let sheet: StyleSheet =
+            toml::from_str(&format!("[page]\ntoc_depth = {depth}\n")).expect("parse");
+        assert!(sheet.validate().is_err(), "depth {depth}");
+    }
+}
+
+#[test]
+fn image_width_range() {
+    let sheet: StyleSheet = toml::from_str("[images]\nmax_width = 0.05\n").expect("parse");
+    assert!(sheet.validate().is_err());
+}

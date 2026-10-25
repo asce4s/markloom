@@ -26,6 +26,7 @@ fn all_builtins_resolve_and_validate() {
             "academic".to_string(),
             "minimal".to_string(),
             "print-friendly".to_string(),
+            "corporate".to_string(),
         ]
     );
     for name in names {
@@ -120,6 +121,41 @@ fn deep_merge_nested() {
     let typography = base["typography"].as_table().expect("typography");
     assert_eq!(typography["base_size"].as_str(), Some("10pt"));
     assert_eq!(typography["line_height"].as_float(), Some(1.6));
+}
+
+#[test]
+fn corporate_resolves() {
+    let sheet = PresetRegistry::builtin()
+        .resolve("corporate", &[])
+        .expect("corporate");
+    assert_eq!(
+        sheet.table.header_bg,
+        Some(markloom_style::Color {
+            r: 0x1d,
+            g: 0x4e,
+            b: 0xd8,
+            a: 255,
+        })
+    );
+    assert_eq!(
+        sheet.table.header_text,
+        Some(markloom_style::Color {
+            r: 0xff,
+            g: 0xff,
+            b: 0xff,
+            a: 255,
+        })
+    );
+    assert_eq!(
+        sheet.table.borders,
+        markloom_style::TableBorders::Horizontal
+    );
+    let left = match sheet.page.margin.left {
+        Length::Pt(points) => points,
+        Length::Em(em) => panic!("expected pt, got {em}em"),
+    };
+    let expected = 18.0 * 72.0 / 25.4;
+    assert!((left - expected).abs() < 0.01, "{left} vs {expected}");
 }
 
 #[test]
