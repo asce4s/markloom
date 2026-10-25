@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use markloom_app::settings::{self, AppTheme, Settings};
-use markloom_app::workspace::{DiskEvent, FileTrash, Workspace};
+use markloom_app::workspace::{DiskChange, DiskEvent, FileTrash, Workspace};
 
 struct MemoryTrash {
     calls: Mutex<Vec<PathBuf>>,
@@ -78,9 +78,10 @@ fn external_edit_of_dirty_buffer_is_a_conflict() {
     workspace.open_file(Path::new("a.md")).unwrap();
     workspace.set_text("dirty\n");
     fs::write(root.join("a.md"), "disk\n").unwrap();
-    workspace
+    let change = workspace
         .apply_disk(DiskEvent::Modified(root.join("a.md")))
         .unwrap();
+    assert_eq!(change, DiskChange::Conflict);
     let buffer = workspace.active().unwrap();
     assert!(buffer.conflict);
     assert_eq!(buffer.text, "dirty\n");
@@ -93,11 +94,66 @@ fn external_edit_of_clean_buffer_reloads() {
     let mut workspace = Workspace::open(&root).unwrap();
     workspace.open_file(Path::new("a.md")).unwrap();
     fs::write(root.join("a.md"), "two\n").unwrap();
-    workspace
+    let change = workspace
         .apply_disk(DiskEvent::Modified(root.join("a.md")))
         .unwrap();
+    assert_eq!(change, DiskChange::Reloaded);
     assert_eq!(workspace.active().unwrap().text, "two\n");
     assert!(!workspace.active().unwrap().conflict);
+}
+
+#[test]
+fn own_save_is_not_a_change() {
+    let root = scratch("own-save");
+    fs::write(root.join("a.md"), "one\n").unwrap();
+    let mut workspace = Workspace::open(&root).unwrap();
+    workspace.open_file(Path::new("a.md")).unwrap();
+    workspace.set_text("edited\n");
+    workspace.save_active().unwrap();
+    let change = workspace
+        .apply_disk(DiskEvent::Modified(root.join("a.md")))
+        .unwrap();
+    assert_eq!(change, DiskChange::None);
+    let buffer = workspace.active().unwrap();
+    assert!(!buffer.conflict);
+    assert_eq!(buffer.text, "edited\n");
+}
+
+#[test]
+fn open_path_file_selects_it() {
+    let root = scratch("open-path");
+    fs::write(root.join("a.md"), "hello\n").unwrap();
+    let (workspace, relative) = Workspace::open_path(&root.join("a.md")).unwrap();
+    assert_eq!(relative, Some(PathBuf::from("a.md")));
+    assert_eq!(workspace.active().unwrap().relative, PathBuf::from("a.md"));
+    assert_eq!(workspace.active().unwrap().text, "hello\n");
+}
+
+#[test]
+fn has_unsaved_lists_dirty() {
+    let root = scratch("unsaved");
+    fs::write(root.join("a.md"), "one\n").unwrap();
+    fs::write(root.join("b.md"), "two\n").unwrap();
+    let mut workspace = Workspace::open(&root).unwrap();
+    workspace.open_file(Path::new("a.md")).unwrap();
+    workspace.set_text("dirty\n");
+    workspace.open_file(Path::new("b.md")).unwrap();
+    assert_eq!(workspace.has_unsaved(), vec![PathBuf::from("a.md")]);
+}
+
+#[test]
+fn non_utf8_file_is_an_error() {
+    let root = scratch("utf8");
+    fs::write(root.join("a.md"), "ok\n").unwrap();
+    fs::write(root.join("bad.md"), [0xff, 0xfe, 0x00]).unwrap();
+    let mut workspace = Workspace::open(&root).unwrap();
+    workspace.open_file(Path::new("a.md")).unwrap();
+    let error = workspace
+        .open_file(Path::new("bad.md"))
+        .expect_err("bad bytes");
+    assert!(error.contains("not UTF-8"), "{error}");
+    assert_eq!(workspace.active().unwrap().relative, PathBuf::from("a.md"));
+    assert_eq!(workspace.active().unwrap().text, "ok\n");
 }
 
 #[test]

@@ -669,23 +669,16 @@ impl Session {
                 let Some(disk) = workspace::disk_event(event.kind, path) else {
                     continue;
                 };
-                if self.workspace.apply_disk(disk).is_err() {
-                    continue;
+                let change = match self.workspace.apply_disk(disk) {
+                    Ok(change) => change,
+                    Err(_) => continue,
+                };
+                if change != workspace::DiskChange::None {
+                    changed = true;
                 }
-                changed = true;
-                if hits_active
-                    && self
-                        .workspace
-                        .active()
-                        .is_some_and(|buffer| buffer.conflict)
-                {
+                if hits_active && change == workspace::DiskChange::Conflict {
                     self.status = "File changed on disk".into();
-                } else if hits_active
-                    && self
-                        .workspace
-                        .active()
-                        .is_some_and(|buffer| !buffer.is_dirty() && !buffer.missing)
-                {
+                } else if hits_active && change == workspace::DiskChange::Reloaded {
                     self.pending_sync = true;
                 }
             }

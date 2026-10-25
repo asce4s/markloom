@@ -21,6 +21,16 @@ impl Buffer {
     }
 }
 
+/// What a watcher event did to the open buffers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskChange {
+    None,
+    Reloaded,
+    Conflict,
+    Removed,
+    Rescanned,
+}
+
 /// Something the file watcher observed inside the workspace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiskEvent {
@@ -123,8 +133,10 @@ impl Workspace {
             return Ok(());
         }
         let absolute = self.root.join(relative);
-        let text = std::fs::read_to_string(&absolute)
+        let bytes = std::fs::read(&absolute)
             .map_err(|error| format!("read {}: {error}", absolute.display()))?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| format!("{} is not UTF-8 text", relative.display()))?;
         self.buffers.push(Buffer {
             relative: relative.to_path_buf(),
             text: text.clone(),
@@ -217,22 +229,59 @@ impl Workspace {
         self.rescan()
     }
 
+    /// Open a folder, or a file's parent folder with that file selected.
+    pub fn open_path(path: &Path) -> Result<(Self, Option<PathBuf>), String> {
+        let path = path
+            .canonicalize()
+            .map_err(|error| format!("open {}: {error}", path.display()))?;
+        if path.is_dir() {
+            return Ok((Self::open(&path)?, None));
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("open {}: no parent", path.display()))?;
+        let mut workspace = Self::open(parent)?;
+        let relative = path
+            .strip_prefix(workspace.root())
+            .map_err(|error| error.to_string())?
+            .to_path_buf();
+        workspace.open_file(&relative)?;
+        Ok((workspace, Some(relative)))
+    }
+
+    /// Relative paths of buffers that differ from disk.
+    pub fn has_unsaved(&self) -> Vec<PathBuf> {
+        self.buffers
+            .iter()
+            .filter(|buffer| buffer.is_dirty())
+            .map(|buffer| buffer.relative.clone())
+            .collect()
+    }
+
     /// Apply one watcher event. A dirty buffer is not overwritten.
-    pub fn apply_disk(&mut self, event: DiskEvent) -> Result<(), String> {
+    pub fn apply_disk(&mut self, event: DiskEvent) -> Result<DiskChange, String> {
         let relative = match &event {
             DiskEvent::Created(path) | DiskEvent::Modified(path) | DiskEvent::Removed(path) => {
                 self.relative_of(path)
             }
         };
         let Some(relative) = relative else {
-            return self.rescan();
+            self.rescan()?;
+            return Ok(DiskChange::Rescanned);
         };
         if !is_markdown(&relative) {
-            return Ok(());
+            return Ok(DiskChange::None);
         }
         match event {
-            DiskEvent::Created(_) => self.rescan(),
+            DiskEvent::Created(_) => {
+                self.rescan()?;
+                Ok(DiskChange::Rescanned)
+            }
             DiskEvent::Removed(_) => {
+                let had_buffer = self
+                    .buffers
+                    .iter()
+                    .any(|buffer| buffer.relative == relative);
                 if let Some(buffer) = self
                     .buffers
                     .iter_mut()
@@ -248,27 +297,41 @@ impl Workspace {
                         }
                     }
                 }
-                self.rescan()
+                self.rescan()?;
+                Ok(if had_buffer {
+                    DiskChange::Removed
+                } else {
+                    DiskChange::Rescanned
+                })
             }
             DiskEvent::Modified(_) => {
                 let absolute = self.root.join(&relative);
-                let Ok(disk) = std::fs::read_to_string(&absolute) else {
-                    return self.rescan();
+                let Ok(bytes) = std::fs::read(&absolute) else {
+                    self.rescan()?;
+                    return Ok(DiskChange::Rescanned);
                 };
-                if let Some(buffer) = self
+                let Ok(disk) = String::from_utf8(bytes) else {
+                    return Ok(DiskChange::None);
+                };
+                let Some(buffer) = self
                     .buffers
                     .iter_mut()
                     .find(|buffer| buffer.relative == relative)
-                {
-                    if buffer.is_dirty() {
-                        buffer.conflict = true;
-                    } else {
-                        buffer.text.clone_from(&disk);
-                        buffer.disk = disk;
-                        buffer.conflict = false;
-                    }
+                else {
+                    return Ok(DiskChange::None);
+                };
+                if disk == buffer.disk {
+                    return Ok(DiskChange::None);
                 }
-                Ok(())
+                if buffer.is_dirty() {
+                    buffer.conflict = true;
+                    Ok(DiskChange::Conflict)
+                } else {
+                    buffer.text.clone_from(&disk);
+                    buffer.disk = disk;
+                    buffer.conflict = false;
+                    Ok(DiskChange::Reloaded)
+                }
             }
         }
     }

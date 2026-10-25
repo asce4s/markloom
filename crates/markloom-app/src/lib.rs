@@ -4,4 +4,5 @@ pub mod preview;
 pub mod search;
 pub mod settings;
 pub mod style_session;
+pub mod text;
 pub mod workspace;
