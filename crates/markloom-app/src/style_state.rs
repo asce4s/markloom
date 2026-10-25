@@ -49,6 +49,11 @@ impl StyleState {
         self.session.preset()
     }
 
+    /// Built-in names, then user presets.
+    pub fn names(&self) -> Vec<String> {
+        self.registry.names()
+    }
+
     /// Whether `prefix` or something under it is overridden.
     pub fn is_overridden(&self, prefix: &str) -> bool {
         self.session.is_overridden(prefix)

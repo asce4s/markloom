@@ -8,13 +8,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AppTheme {
-    #[default]
     Light,
+    #[default]
     Dark,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// App preferences. A missing or broken file loads the defaults.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub theme: AppTheme,
@@ -22,16 +26,30 @@ pub struct Settings {
     pub default_preset: String,
     pub autosave: bool,
     pub recent: Vec<PathBuf>,
+    /// Files sidebar. Hidden until the user opens it.
+    pub files_open: bool,
+    /// Document settings column. Open until the user hides it.
+    #[serde(default = "default_true")]
+    pub settings_open: bool,
+    /// Cursor line follows the preview, and the other way around.
+    #[serde(default = "default_true")]
+    pub sync_scroll: bool,
+    /// Files, editor, preview, and settings widths in pixels.
+    pub column_widths: Option<[f32; 4]>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            theme: AppTheme::Light,
+            theme: AppTheme::Dark,
             editor_font: "DejaVu Sans Mono".into(),
             default_preset: "github".into(),
             autosave: false,
             recent: Vec::new(),
+            files_open: false,
+            settings_open: true,
+            sync_scroll: true,
+            column_widths: None,
         }
     }
 }

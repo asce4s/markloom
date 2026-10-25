@@ -157,6 +157,29 @@ impl Workspace {
         Ok(())
     }
 
+    /// Write every dirty buffer without changing which one is active.
+    pub fn save_dirty(&mut self) -> Result<(), String> {
+        let dirty = self.has_unsaved();
+        for relative in dirty {
+            let absolute = self.root.join(&relative);
+            if let Some(parent) = absolute.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|error| format!("create {}: {error}", parent.display()))?;
+            }
+            let buffer = self
+                .buffers
+                .iter_mut()
+                .find(|buffer| buffer.relative == relative)
+                .ok_or_else(|| format!("no buffer {}", relative.display()))?;
+            std::fs::write(&absolute, &buffer.text)
+                .map_err(|error| format!("write {}: {error}", relative.display()))?;
+            buffer.disk.clone_from(&buffer.text);
+            buffer.conflict = false;
+            buffer.missing = false;
+        }
+        self.rescan()
+    }
+
     /// Write the active buffer and clear its dirty and conflict flags.
     pub fn save_active(&mut self) -> Result<(), String> {
         let Some(index) = self.active else {

@@ -178,6 +178,6 @@ fn settings_round_trip_and_recent_cap() {
     assert_eq!(loaded.recent.len(), 8);
     assert_eq!(
         settings::load(&root.join("missing.toml")).theme,
-        AppTheme::Light
+        AppTheme::Dark
     );
 }

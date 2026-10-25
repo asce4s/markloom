@@ -13,7 +13,6 @@ markloom-mermaid = { path = "../markloom-mermaid" }
 markloom-style = { path = "../markloom-style" }
 markloom-typeset = { path = "../markloom-typeset" }
 notify.workspace = true
-png.workspace = true
 serde.workspace = true
 toml.workspace = true
 trash.workspace = true

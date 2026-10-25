@@ -4693,7 +4693,6 @@ dependencies = [
  "markloom-style",
  "markloom-typeset",
  "notify",
- "png 0.17.16",
  "proptest",
  "serde",
  "toml 1.1.8+spec-1.1.0",

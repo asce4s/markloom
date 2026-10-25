@@ -112,6 +112,53 @@ impl Document {
         Ok(())
     }
 
+    /// Write every dirty buffer. The editor's cursor stays where it is.
+    pub fn save_dirty(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
+        self.workspace.save_dirty()?;
+        cx.emit(DocumentEvent::Saved);
+        cx.notify();
+        Ok(())
+    }
+
+    /// Open one workspace file into the editor.
+    pub fn open_file(
+        &mut self,
+        relative: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.workspace.open_file(relative)?;
+        let text = self.text().to_string();
+        self.load_text(text, window, cx);
+        Ok(())
+    }
+
+    /// Create a Markdown file and show it.
+    pub fn create_file(
+        &mut self,
+        relative: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.workspace.create_file(relative)?;
+        let text = self.text().to_string();
+        self.load_text(text, window, cx);
+        Ok(())
+    }
+
+    /// Move a file to the trash and show whatever buffer remains.
+    pub fn delete_file(
+        &mut self,
+        relative: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.workspace.delete(relative, &workspace::SystemTrash)?;
+        let text = self.text().to_string();
+        self.load_text(text, window, cx);
+        Ok(())
+    }
+
     /// Open another folder or file in this same document.
     pub fn open_path(
         &mut self,
@@ -146,6 +193,10 @@ impl Document {
             let end = cursor + placeholder.end;
             editor.set_selected_range(start..end, cx);
         });
+        // `EditorState::insert` does not emit `InputEvent::Change`, so the
+        // workspace would otherwise keep the text from before the snippet.
+        let text = self.editor.read(cx).value().to_string();
+        self.apply_typed(text, cx);
     }
 
     /// Apply watcher events. Call this from the window; it needs the window

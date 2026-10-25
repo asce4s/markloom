@@ -130,10 +130,79 @@ impl PreviewState {
     }
 
     /// Pages the preview viewport currently shows, inclusive.
+    pub fn visible(&self) -> (usize, usize) {
+        self.visible
+    }
+
+    /// Pages the preview viewport currently shows, inclusive.
+    ///
+    /// The same span does not start another draw.
     pub fn set_visible(&mut self, visible: (usize, usize), cx: &mut Context<Self>) {
+        if self.visible == visible {
+            return;
+        }
         self.visible = visible;
         let generation = self.generation;
         self.start_raster(generation, cx);
+    }
+
+    /// Current zoom.
+    pub fn zoom(&self) -> Zoom {
+        self.zoom
+    }
+
+    /// Step to the next larger zoom and keep the images already on screen.
+    pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom(preview_pipeline::zoom_in(self.zoom, 100.0), cx);
+    }
+
+    /// Step to the next smaller zoom and keep the images already on screen.
+    pub fn zoom_out(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom(preview_pipeline::zoom_out(self.zoom, 100.0), cx);
+    }
+
+    /// Switch zoom. Old images stay until the new scale replaces them.
+    pub fn set_zoom(&mut self, zoom: Zoom, cx: &mut Context<Self>) {
+        self.zoom = zoom;
+        self.start_raster(self.generation, cx);
+    }
+
+    /// Display size of one page in logical pixels.
+    pub fn page_display_px(&self, index: usize) -> Option<(f32, f32)> {
+        let compiled = self.compiled.as_ref()?;
+        if index >= compiled.page_count() {
+            return None;
+        }
+        let (width, height) = compiled.page_size_pt(index);
+        let logical = self.scale() / self.hidpi.max(1.0);
+        Some((width * logical, height * logical))
+    }
+
+    /// Markdown line under a point on a page, in Typst points from the top.
+    pub fn line_at(&self, page: usize, y_pt: f32) -> Option<u32> {
+        self.compiled.as_ref()?.source_map.line_at(page, y_pt)
+    }
+
+    /// Typst points from the top of a page for a click `y_px` logical pixels down.
+    pub fn y_pt(&self, index: usize, y_px: f32) -> Option<f32> {
+        let compiled = self.compiled.as_ref()?;
+        if index >= compiled.page_count() {
+            return None;
+        }
+        let logical = self.scale() / self.hidpi.max(1.0);
+        if logical <= 0.0 {
+            return None;
+        }
+        Some(y_px.max(0.0) / logical)
+    }
+
+    /// Remember the preview canvas size. Fit zoom reads it on the next raster.
+    pub fn set_viewport(&mut self, width: f32, height: f32) {
+        if (self.viewport_w - width).abs() < 0.5 && (self.viewport_h - height).abs() < 0.5 {
+            return;
+        }
+        self.viewport_w = width.max(1.0);
+        self.viewport_h = height.max(1.0);
     }
 
     /// Follow the caret only while this is on.
