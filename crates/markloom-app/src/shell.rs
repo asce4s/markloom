@@ -624,6 +624,7 @@ struct FilesPanel {
 
 impl FilesPanel {
     fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&session, |_, _, cx| cx.notify()).detach();
         Self {
             session,
             focus: cx.focus_handle(),
@@ -742,6 +743,7 @@ impl EditorPanel {
             },
         )
         .detach();
+        cx.observe(&session, |_, _, cx| cx.notify()).detach();
         cx.observe(&editor, |this, editor, cx| {
             let line = editor.read(cx).cursor_position().line;
             this.session.update(cx, |session, cx| {
@@ -836,6 +838,7 @@ struct PreviewPanel {
 
 impl PreviewPanel {
     fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
+        cx.observe(&session, |_, _, cx| cx.notify()).detach();
         Self {
             session,
             focus: cx.focus_handle(),
@@ -1024,6 +1027,7 @@ impl StylePanel {
             },
         )
         .detach();
+        cx.observe(&session, |_, _, cx| cx.notify()).detach();
         Self {
             session,
             focus: cx.focus_handle(),
@@ -1212,6 +1216,11 @@ impl Shell {
         let editor_panel = cx.new(|cx| EditorPanel::new(session.clone(), window, cx));
         let preview = cx.new(|cx| PreviewPanel::new(session.clone(), cx));
         let style = cx.new(|cx| StylePanel::new(session.clone(), window, cx));
+        cx.observe(&session, |this, _, cx| {
+            this.dock.update(cx, |_, cx| cx.notify());
+            cx.notify();
+        })
+        .detach();
         dock.update(cx, |dock, cx| {
             dock.add_panel_view(
                 panel_handle(files),
