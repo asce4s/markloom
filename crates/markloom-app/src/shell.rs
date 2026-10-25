@@ -16,7 +16,7 @@ use gpui_kit::component::input::{Editor, EditorState, InputEvent, Position};
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
-use markloom_app::preview::{self, PageCache, Zoom};
+use markloom_app::preview_pipeline::{self, Zoom};
 use markloom_app::search::{self, SearchHit};
 use markloom_app::settings::{self, AppTheme, Settings};
 use markloom_app::style_session::StyleSession;
@@ -50,6 +50,28 @@ enum ViewMode {
     Split,
     Editor,
     Preview,
+}
+
+/// PNG bytes kept until Task 6 replaces this path with RenderImage.
+#[derive(Debug, Default, Clone)]
+struct PageCache {
+    pages: std::collections::HashMap<(usize, u128, u32), Vec<u8>>,
+}
+
+impl PageCache {
+    fn get(&self, index: usize, hash: u128, scale_bits: u32) -> Option<&[u8]> {
+        self.pages
+            .get(&(index, hash, scale_bits))
+            .map(Vec::as_slice)
+    }
+
+    fn insert(&mut self, index: usize, hash: u128, scale_bits: u32, bytes: Vec<u8>) {
+        self.pages.insert((index, hash, scale_bits), bytes);
+    }
+
+    fn retain_pages(&mut self, mut keep: impl FnMut(usize) -> bool) {
+        self.pages.retain(|(index, _, _), _| keep(*index));
+    }
 }
 
 struct Session {
@@ -210,7 +232,9 @@ impl Session {
         let base = self.workspace.root().to_path_buf();
         let compile_markdown = markdown.clone();
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(preview::DEBOUNCE).await;
+            cx.background_executor()
+                .timer(preview_pipeline::DEBOUNCE)
+                .await;
             let still = this
                 .update(cx, |this, _| this.token == token)
                 .unwrap_or(false);
@@ -278,7 +302,7 @@ impl Session {
         };
         let count = compiled.page_count();
         let (page_w, page_h) = compiled.page_size_pt(0);
-        let scale = preview::pixels_per_pt(
+        let scale = preview_pipeline::pixels_per_pt(
             self.zoom,
             self.viewport.0,
             self.viewport.1,
@@ -290,14 +314,14 @@ impl Session {
         if page_w > 0.0 && page_h > 0.0 {
             self.page_px = (page_w * scale, page_h * scale);
         }
-        let bits = preview::scale_bits(scale);
+        let bits = preview_pipeline::scale_bits(scale);
         if self.raster_bits != bits {
             self.cache = PageCache::default();
             self.images.clear();
             self.raster_bits = bits;
         }
         let (first, last) = self.visible;
-        let range = preview::pages_to_rasterize(first, last, count);
+        let range = preview_pipeline::pages_to_rasterize(first, last, count);
         self.cache.retain_pages(|index| range.contains(&index));
         self.images.resize(count, None);
         let mut pending = Vec::new();
@@ -329,7 +353,9 @@ impl Session {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.paint_token != token || preview::scale_bits(this.last_scale) != bits {
+                if this.paint_token != token
+                    || preview_pipeline::scale_bits(this.last_scale) != bits
+                {
                     return;
                 }
                 for (index, hash, bytes) in painted {
@@ -1193,7 +1219,8 @@ impl Render for PreviewPanel {
             viewport_w = size.width.as_f32().round();
             viewport_h = size.height.as_f32().round();
         }
-        let (first, last) = preview::visible_span(offset_y.max(0.0), viewport_h, item_h, count);
+        let (first, last) =
+            preview_pipeline::visible_span(offset_y.max(0.0), viewport_h, item_h, count);
         let unchanged = {
             let session = self.session.read(cx);
             session.viewport == (viewport_w, viewport_h)
